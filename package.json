@@ -1,0 +1,21 @@
+{
+  "name": "ecom-agent",
+  "version": "0.1.0",
+  "description": "BitGN E-commerce Agent — BitGN Challenge",
+  "type": "module",
+  "scripts": {
+    "run": "tsx runs/run.ts",
+    "dev": "tsx runs/run.ts --bench=local --concurrency=1",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
