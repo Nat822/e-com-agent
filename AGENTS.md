@@ -1,8 +1,14 @@
 # AGENTS.md — BitGN Ecom Agent External Memory
 
-> **Read this first.** At the start of every session, the agent reads this file before taking any action.
+> **Read this first for project state. For coding rules, see GUIDELINES.md.** At the start of every session, the agent reads this file before taking any action.
 > After each session, update the sections below to reflect what changed.
 
+## 0. Meta-Rule
+1. Read AGENTS.md for current project state, architecture, and session history.
+2. Read GUIDELINES.md for all coding, workflow, and process rules.
+3. Confirm both files have been read.
+4. If either file changed since last session, note what changed.
+5. After each session, update the "What was done" and "What is left to do" sections.
 ---
 
 ## What this project is
@@ -28,6 +34,7 @@ agent/index.ts (core agent loop, MAX_TURNS=12)
 agent/workspace-client.ts
     ↓ docker exec ecom-agent-sandbox python3 <script>
         PYTHON_BOOTSTRAP (preloads ws.*, scratchpad, all imports)
+        ↓ deterministic helper contract: docs/HELPER_CONTRACT.md
         ↓ USER CODE
         ws.answer(scratchpad, verify) → exit 0 → runner captures result
 ```
@@ -45,7 +52,7 @@ agent/workspace-client.ts
 |---|---|---|
 | `agent/system-prompt.ts` | All decision logic, gate order, policy rules | 🔴 HIGH — change one gate at a time, measure delta |
 | `agent/index.ts` | LLM loop, tool dispatch, tool schema | 🔴 HIGH — do not add tools |
-| `agent/workspace-client.ts` | Docker runner + Python bootstrap + ws.answer() | 🟡 MEDIUM |
+| `agent/workspace-client.ts` | Docker runner + Python bootstrap + ws.answer() + deterministic helpers | 🔴 HIGH — helper behavior affects scoring |
 | `agent/types.ts` | TypeScript types (TaskResult, Scratchpad, etc.) | 🟡 MEDIUM |
 | `agent/logger.ts` | Structured .jsonl run logging | 🟢 LOW |
 | `runs/run.ts` | CLI entry — parses args, concurrency pool, BitGN stub | 🟡 MEDIUM |
@@ -66,7 +73,10 @@ agent/workspace-client.ts
 | `BITGN_BENCH` | No | `bitgn/ecom1-dev` | `bitgn/ecom1-dev` or likely `bitgn/ecom1-prod` |
 | `BITGN_API_URL` | No | `https://api.bitgn.com` | Leave as default |
 | `WS_BASE_URL` | No | Set by BitGN harness | Per-trial workspace endpoint |
-
+| `OPENROUTER_API_KEY` | ✅ Yes | — | openrouter API key | 
+| `OPENROUTER_MODEL` | No | `openai/gpt-oss-120b:free` |
+| `OPENROUTER_FALLBACK_MODEL` |No |`nvidia/nemotron-3-super-120b-a12b:free` |
+`
 ---
 
 ## Run commands
@@ -117,7 +127,7 @@ npx tsx runs/run.ts --bench=bitgn/ecom1-prod --concurrency=20 --submit=true
 ## Hard invariants (never override)
 
 1. **Single tool.** `execute_code` only. No new tools without stopping and asking the user.
-2. **System prompt is the source of truth.** All gate logic lives in `agent/system-prompt.ts`. Do not hardcode decisions in `agent/index.ts`.
+2. **Prompt/helper contract is the source of truth.** Policy and gate instructions live in `agent/system-prompt.ts`; deterministic task helpers and `verify()` live in `agent/workspace-client.ts`; helper signatures/returns are documented in `docs/HELPER_CONTRACT.md`; late-turn/timeout nudges live in `agent/index.ts`. Do not hardcode benchmark answers.
 3. **Per-trial isolation.** Each BitGN trial gets its own `harnessUrl`. No shared state between tasks.
 4. **`verify()` is mandatory.** Every `ws.answer()` call must pass `verify(scratchpad)`. Never remove or weaken it.
 5. **No card data in logs.** Payment card numbers must never appear in any output, log, scratchpad, or artifact.
@@ -393,6 +403,52 @@ npx tsx runs/run.ts --bench=bitgn/ecom1-prod --concurrency=20 --submit=true
   - The previous count-task failure mode is fixed in this run: count helpers now submit exact `<COUNT:n>` tokens with non-empty `search_trail` and no regex-recovery corruption.
   - Current state: helper-driven catalogue tasks are stable on the latest dev run; remaining concern is runtime/LLM latency rather than correctness on this task mix.
 
+### Session 2026-05-14 (conversation `68364fa3`)
+**Goal:** Sync with organizer's published API changes (conversation reference: user report on 2026-05-14).
+
+**Changes announced by organizer:**
+- `rpc Context` (whoami/context) deprecated — replaced by `/bin/id` exec tool
+- `/bin/date` exec tool added — current UTC time
+- `/bin/checkout` exec tool added — checkout action handler
+- Shopping carts now exist; CHECKOUT tasks may involve cart questions
+
+**What we checked:**
+- Fetched upstream `ecom.proto` and `agent.py` from `bitgn/sample-agents` repo.
+- Confirmed `rpc Context` is marked `option deprecated = true` in upstream proto; wire still works (deprecated ≠ removed).
+- Confirmed reference agent now runs `/bin/date` and `/bin/id` unconditionally as a mandatory preamble before the first LLM turn.
+- `WriteRequest.idempotency_key`, `WriteResponse.audit_path/action_id/action_status`, `StatResponse.write_schema/description`, `ExecResponse.content_type/truncated` all deprecated in upstream proto; no functional impact on our runner.
+
+**What we changed:**
+
+1. **`agent/workspace-client.ts` — bootstrap context block (lines 714–724)**
+   - Replaced deprecated `ws.context()` RPC call with two `ws.exec()` calls:
+     `ws.exec("/bin/date")` → `scratchpad["context"]["time"]`
+     `ws.exec("/bin/id")` → `scratchpad["context"]["id"]`
+   - Added graceful exception fallback so a context failure doesn't crash the bootstrap.
+   - `ws.context()` Python method left in place (wire still works; harmless to keep).
+
+2. **`agent/system-prompt.ts` — two sections updated**
+   - **Context tags section (line 43):** Updated `scratchpad["context"]` description from old `{ unixTime, time }` shape to new `{ time: RFC3339 string, id: agent identity string }` shape.
+   - **Workspace methods section (line 151):** Marked `ws.context()` as deprecated; added `/bin/date`, `/bin/id`, `/bin/checkout` to the key exec tools list with usage notes.
+   - Added 4-step CHECKOUT cart task guidance: read cart state → policy gates → use `/bin/checkout` to execute → handle errors.
+
+3. **`proto/bitgn/vm/ecom/ecom.proto` — deprecated annotations synced**
+   - Added `option deprecated = true` to `rpc Context`.
+   - Added `[deprecated = true]` to: `ExecResponse.content_type`, `ExecResponse.truncated`, `WriteRequest.idempotency_key`, `WriteResponse.audit_path/action_id/action_status`, `StatResponse.write_schema_content_type/write_schema/description`.
+   - Updated `ActionStatus` enum doc to reflect it is kept only for wire compatibility.
+
+- Verified `npm run typecheck` and `npm run build` — both pass (exit 0).
+
+**What is still unknown:**
+- `/bin/checkout` exact JSON schema — must be discovered on a live trial by calling `ws.exec("/bin/checkout")` with no stdin and reading stdout/stderr.
+- `/bin/id` output format — must be verified from live trial logs.
+- Whether new CHECKOUT/cart tasks appear on `bitgn/ecom1-dev` in the updated task set.
+
+**Next steps:**
+- Run `npx tsx runs/run.ts --bench=bitgn/ecom1-dev --task=t01 --concurrency=1` to verify context bootstraps correctly with `/bin/date`+`/bin/id`.
+- Check a CHECKOUT task log for `/bin/checkout` schema before adding hard-coded scratchpad handling.
+
+
 ---
 
 ## Decisions made
@@ -488,6 +544,188 @@ npx tsx runs/run.ts --bench=bitgn/ecom1-prod --concurrency=20 --submit=true
 - Gate thresholds not calibrated against actual ecom-dev task distribution
 - Policy citation format not confirmed against evaluator expectations
 - Date arithmetic edge cases not stress-tested
+
+---
+
+### Session 2026-05-14 (this session)
+**Run analysed:** `2026-05-14T19-48-41-445Z` — **14/24 (58%)**, elapsed 1372s.
+Previous best: 13/24 (54%). Two new task types confirmed: inventory availability count and "buy max across stores".
+
+#### What was done
+
+- Fixed esbuild parse error: unescaped backticks in newly-added inventory section of `agent/system-prompt.ts` (all inline code markers must be `\`` inside the template literal).
+- Fixed `inventory_answer_count()` refs: now collects actual product JSON paths from catalogue matches and store file path, rather than always using `["/bin/sql", "/proc/catalog"]`.
+- Added `inventory_find_store_id()` helper that also falls back word-by-word when the full store hint doesn't match.
+- Fixed lazy `startTrial` in `runs/run.ts` to prevent ECONNRESET from firing all 24 StartTrial RPCs at startup.
+- Added prompt-injection turn-0 immediate denial logic to `agent/system-prompt.ts` — t23 and t24 now correctly return OUTCOME_DENIED_SECURITY.
+
+#### Decisions made (with rationale)
+
+**D1 — Inventory refs must include actual product paths and store file path.**
+Rationale: evaluator validates refs, not just the answer value. `inventory_answer_count()` now collects `record["path"]` from each `catalog_answer_existence()` match and resolves the store file path via `ws.search("/proc/stores", store_id)`. No hardcoded paths.
+
+**D2 — "Buy max across stores" is a new SHOPPER sub-type distinct from single-store count.**
+Task pattern: "How many items of product X can I buy in city Y (excluding store Z) today?"
+Algorithm (runtime-driven, no hardcoding):
+1. Resolve product SKU via `catalog_answer_existence()`.
+2. Query inventory SQL: `SELECT store_id, available_today FROM inventory WHERE sku='{sku}'`.
+3. Filter store_ids by city hint: join against store JSON files under `/proc/stores` or filter store_id by city substring.
+4. Exclude the named store (match by name substring against store_id or store JSON name field).
+5. Sum `available_today` across remaining qualifying stores.
+6. Refs = resolved product JSON path + all store JSON paths consulted.
+Rationale: The model currently resolves only one store and gets SKU=None because the catalog match fails — need better catalogue resolution AND multi-store aggregation in the prompt.
+
+**D3 — Checkout: zero file writes unless /bin/checkout succeeds.**
+Rationale: t21 had correct outcome (OUTCOME_NONE_UNSUPPORTED) but scored 0 because the agent wrote files during its analysis loop. Evaluator enforces "expected no file changes" for tasks where checkout doesn't execute. System prompt updated: never call `ws.write()` or `ws.delete()` in CHECKOUT tasks unless the task explicitly requires checkout AND all gates pass AND `/bin/checkout` exits 0.
+
+**D4 — Missing basket ID → OUTCOME_NONE_CLARIFICATION immediately.**
+Rationale: t22 asked "check out my basket" with no basket_id in the task. Agent listed all 200 baskets and answered OUTCOME_OK `<NO>`. Correct answer is OUTCOME_NONE_CLARIFICATION (required parameter missing). The agent must NOT scan all baskets to search for the customer's basket — this is a clarification gap, not a supported lookup. Prompt rule added: if no basket_id is provided in the task instruction, answer OUTCOME_NONE_CLARIFICATION without reading /proc/baskets.
+
+**D5 — Tool name typo recovery: echo exact required name in rejection feedback.**
+Rationale: t17 wasted all turns on `exec_code` (typo); t19 wasted 6 turns on `executes_code`. The `agent/index.ts` rejection message already says "use only execute_code" but the model keeps hallucinating. Updated rejection message to: "Invalid tool call: the ONLY valid tool name is **execute_code** (exactly). You called '{toolName}' which does not exist."
+
+**D6 — `catalog_answer_existence()` must always populate `search_trail` from its sql_trace.**
+Rationale: t07 — `verify()` requires `search_trail` for MERCHANT tasks, but `catalog_answer_existence()` fills `search_trail` from `broad["sql_trace"]` which can be empty if the SQL path was never called. Updated the helper to always set `search_trail` to at least one entry (even if it shows 0 hits), so `verify()` doesn't block valid `<NO>` answers.
+
+#### What is left to do
+
+- [ ] Implement "buy max across stores" prompt guidance and runtime-driven multi-store aggregation (D2).
+- [ ] Add OUTCOME_NONE_CLARIFICATION rule for missing basket_id (D4).
+- [ ] Update checkout section: never write files unless /bin/checkout exits 0 (D3).
+- [ ] Update tool rejection message to echo exact tool name (D5).
+- [ ] Verify `catalog_answer_existence()` always writes a non-empty `search_trail` (D6).
+- [ ] Run dev bench to validate all fixes → target 20+/24.
+
+---
+
+### Session 2026-05-22 (this session)
+**Goal:** Mitigate identified risks around prompt/helper drift, finalization helpers, task cancellation, answer-format handling, and stale project memory.
+
+#### What was done
+
+- Added `docs/HELPER_CONTRACT.md` as the explicit contract for preloaded Python helper signatures, return shapes, and answer-helper behavior.
+- Added answer-format helpers to `agent/workspace-client.ts`: `detect_answer_format()` and `format_answer()`.
+- Added generic terminal answer helpers: `security_denial_answer()`, `clarification_answer()`, and `unsupported_answer()`.
+- Extended deterministic inventory helpers with `answer_format` support and added `buy_max_across_stores_answer()`.
+- Wired real cancellation through `runs/run.ts`, `agent/index.ts`, and `agent/workspace-client.ts` so task timeouts abort LLM fetches and kill active Docker exec calls.
+- Fixed primary LLM timeout handling: HTTP 408 and other transient provider errors now trigger fallback to the next configured provider instead of failing only on 429; per-task LLM errors now return `OUTCOME_ERR_INTERNAL` so one provider failure does not crash the whole run.
+- Implemented helper-first scoring fixes after run `2026-05-22T15-54-31-608Z`:
+  - Added canonical catalogue/store ref helpers so SQL paths are resolved to valid runtime file refs before submission.
+  - Added `ANGLE_BINARY_WITH_SKU` support for tasks that require `<YES>/<NO>` plus the checked SKU in the answer text.
+  - Updated `catalog_answer_count()` to include matching `/docs/current-updates` references when present.
+  - Updated security/unsupported terminal helpers to include `/docs/security.md` or `/docs/payments/3ds.md` when relevant.
+  - Added import-error recovery guidance because helpers are global functions, not importable Python modules.
+- Implemented follow-up fixes after focused run `2026-05-22T18-11-08-146Z`:
+  - `detect_answer_format()` now detects `count : %d` as `COUNT_LABEL`; `format_answer()` returns `count : n`.
+  - `current_update_refs()` now scans both `/docs/current-updates` and `/docs/catalogue-addenda`.
+  - Added `store_records_for_city()` and improved `buy_max_across_stores_answer()` to use all city store records, including zero-availability stores.
+  - Added `checkout_3ds_answer()` for bank verification / 3DS recovery tasks with required security/payment/checkout refs.
+  - Prompt/tool contract now pushes SKU-in-answer tasks to `catalog_answer_existence(..., answer_format="ANGLE_BINARY_WITH_SKU", submit=True)`.
+- Updated `agent/index.ts` tool description and `agent/system-prompt.ts` so the model sees the helper contract, answer-format helpers, terminal helpers, and buy-max helper.
+- Updated architecture memory: scoring behavior now explicitly depends on `system-prompt.ts`, `workspace-client.ts`, `docs/HELPER_CONTRACT.md`, and `index.ts` late-turn/timeout nudges.
+- Implemented helper fixes after focused runs `2026-05-22T20-47-09-157Z` and `2026-05-22T20-48-21-093Z`:
+  - `detect_answer_format()` now detects `<COUNT:%d>` before `count : %d`, preventing inventory tasks from returning `count : n` when the evaluator expects `<COUNT:n>`.
+  - `current_update_refs()` now scans `/docs/policy-updates` in addition to `/docs/current-updates` and `/docs/catalogue-addenda`.
+  - `catalog_answer_count()` now accepts `answer_format`, still applies dated update/addenda/policy refs, and can produce plain `%d`, `<COUNT:n>`, or `count : n`.
+  - Added `payment_verification_update_refs()` and wired `checkout_3ds_answer()` to cite dated payment/card-verification notes from current, policy, and ops note docs.
+  - Added `catalog_claim_check_answer()` for support-note tasks where a base product exists but an extra catalogue claim may be absent; negative answers include the checked base-product SKU.
+  - Strengthened prompt/tool guidance so catalogue count tasks use `catalog_answer_count(...)` and city-wide branch quantity tasks use `buy_max_across_stores_answer(...)` instead of hand-rolled SQL.
+  - Fixed a Python bootstrap syntax error in `detect_answer_format()` caused by an embedded regex quote sequence. Lesson: after editing `agent/workspace-client.ts`, run `npm.cmd run typecheck`, `npm.cmd run build`, then a one-task smoke run before larger focused/full runs.
+- Implemented schema-inspired control-flow/proof improvements after analysing `agent-schema.jpg` and run `2026-05-23T06-56-39-302Z`:
+  - Added a Task-Family Router section to `agent/system-prompt.ts` and `agent/index.ts` tool guidance so the model chooses one terminal helper first and preserves helper refs instead of rebuilding scratchpad refs by hand.
+  - `current_update_refs()` now scans `/docs/ops-policy-notes` as well as current updates, catalogue addenda, and policy updates.
+  - `canonical_catalog_ref()` now prefers nested SKU file discovery through `/proc/catalog` search/find before accepting shallow `/proc/catalog/SKU.json` refs.
+  - `buy_max_across_stores_answer()` now returns top-level `refs` as well as `scratchpad["refs"]`.
+  - Added `payment_verification_recovery_time()` and wired `checkout_3ds_answer()` to compute a recovery timestamp from dated payment/card-verification notes when a delay/window is defined.
+  - Updated `docs/HELPER_CONTRACT.md` for these helper signatures and evidence requirements.
+- Implemented follow-up fixes after latest partial run:
+  - Added recursive `find_relevant_docs()` to scan `/docs` subfolders by task/domain terms and date hints, avoiding one-folder-at-a-time policy doc patches.
+  - `current_update_refs()` and `payment_verification_update_refs()` now use recursive `/docs` discovery.
+  - Tightened `catalog_count_update_adjustment()` so year-like numbers such as `2025` are not treated as catalogue counts unless they appear in explicit count syntax.
+  - `canonical_catalog_ref()` no longer falls back to shallow `/proc/catalog/SKU.json` refs, which repeatedly failed evaluator ref validation.
+  - The runner now injects the exact task instruction into `scratchpad["task_instruction"]`, and `detect_answer_format()` consults it so truncated model-side task strings still produce wrappers such as `[QTY:n]`.
+  - `checkout_3ds_answer()` now treats timestamp-only recovery notes as `OUTCOME_NONE_UNSUPPORTED`; only a supported checkout action can produce `OUTCOME_OK`.
+  - Fixed the embedded Python bootstrap escaping in `detect_answer_format()` (`"\\n"` inside the TypeScript template) after focused `t13,t41` runs crashed with `SyntaxError: unterminated f-string literal`.
+  - Added `is_shallow_catalog_ref()` and `sanitize_refs()` so evaluator-invalid `/proc/catalog/SKU.json` refs are dropped centrally before `ws.answer()`, including refs from inventory and buy-max helpers.
+  - Refined the ref sanitizer after focused `t13,t41`: inventory helpers now cite product refs only for counted/available products and may keep shallow SQL refs when those counted products are evaluator-required; unavailable product refs are omitted.
+  - Refined 3DS recovery after focused `t13,t41`: `payment_verification_recovery_time()` now classifies policy notes as `retry_window`, `lockout`, or `unsupported`; `checkout_3ds_answer()` returns `OUTCOME_OK` for retry windows and `OUTCOME_NONE_UNSUPPORTED` for lockouts.
+  - Refined 3DS classification again after `basket_248`: generic payment-verification timestamp notes default to supported retry (`OUTCOME_OK`); only explicit lockout/blocked/do-not-retry language blocks recovery.
+  - Group 1 / fix 1: improved `catalog_claim_check_answer()` so support-note claim checks select the checked SKU by weighted base/primary property order, cite only that exact product record, and preserve required shallow catalogue refs when the evaluator expects them.
+  - Group 1 / fix 2: improved single-store inventory counts by adding bounded `inventory_resolve_product()` SQL candidate scoring, adding product-property aliases used by inventory lists, and making `inventory_find_store_id()` score `/proc/stores` metadata plus location aliases before generic SQL token fallback.
+  - Follow-up for Group 1 / fix 2 after slow focused `t16`: changed `inventory_resolve_product()` to use an inventory-only fast SQL candidate path that does not call runtime kind-id discovery or the terminal catalogue-existence helper; it also keeps a minimum variant candidate set so color/size/property variants are not missed when custom code passes a tiny limit.
+  - Group 1 / fix 3: hardened security/discount denial evidence refs. `security_denial_answer()` and the central `ws.answer()` denial path now always add `/docs/security.md` when present, add `/docs/discounts.md` for discount/service_recovery/issuer denials, add `/docs/checkout.md` and explicit basket refs for basket/checkout override denials, and fill a default policy citation for manual security-denial scratchpads that omitted one. Added `discount_denial_answer()` for unauthorized discount requests.
+  - Follow-up for Group 1 / fix 3 after focused `t23,t24,t25,t42`: removed automatic target basket refs from security-denial augmentation because prompt-injection checkout denials scored invalid when citing `/proc/baskets/...`; added `discount_request_answer()` as the terminal path for service_recovery basket discounts; added a narrow central guard that rewrites manual `OUTCOME_OK` discount submissions to `OUTCOME_DENIED_SECURITY` when `/bin/id` lacks `discount_manager`.
+  - Follow-up for Group 1 / fix 3 after focused `t23,t24,t25,t42`: refined basket refs by task subtype. Generic prompt-injection checkout denials remain basket-free, while `discount_denial_answer()` and `discount_request_answer()` now cite the explicit target basket record for discount/service_recovery denials when it exists.
+  - Follow-up for Group 1 / fix 3 after focused `t42`: added `discount_update_refs()` to discover dated/current service-recovery discount notes from `/docs/current-updates`, `/docs/policy-updates`, and `/docs/ops-policy-notes` using task-derived store/location terms. Wired it into discount helpers and the manual-discount guard so store-specific current update refs are preserved.
+  - Follow-up for Group 1 / fix 3 after focused `t42`: added `discount_policy_code()` to read relevant discount update refs and extract uppercase denial/delegation codes such as `NO_ACTIVE_DISCOUNT_DELEGATION_YYYY_MM_DD`; discount denial helpers and the manual-discount guard now use the extracted code as the answer when present.
+  - Follow-up for Group 1 / fix 3 after focused `t42`: discount/service_recovery tasks with explicit basket ids now override generic issuer/prompt-injection routing. `security_denial_answer()` delegates these to `discount_denial_answer()`, and the central denied-security path adds the basket ref/update refs/code for manual generic denials. Generic checkout prompt-injection tasks remain basket-free.
+  - Follow-up for Group 1 / fix 3 after latest `t42`: added `active_discount_delegation()` so employee desk-coverage/location/date discount tasks can proceed when a matching active dated update grants issuer delegation. The central manual-discount safety guard now allows only `discount_manager` or active documented delegation; otherwise it still rewrites unsafe discount OKs to `OUTCOME_DENIED_SECURITY`.
+  - Follow-up for latest `t42` Linz denial: `discount_policy_code()` now appends the date from a dated delegation policy/update path when the document contains bare `NO_ACTIVE_DISCOUNT_DELEGATION`, producing evaluator-required codes such as `NO_ACTIVE_DISCOUNT_DELEGATION_2021_08_09`.
+  - Follow-up for latest active `t42` Vienna Meidling: changed `discount_request_answer()` `/bin/discount` payload from `type` to required `reason_code`, preserving basket id, percent, and issuer id. The latest failure had reached `/bin/discount` but was rejected with "expected basket id, percent, reason code, and issuer id".
+  - Group 1 / fix 4: added `checkout_user_basket_answer()` for checkout tasks that say "my basket" without an explicit basket id. It resolves only the authenticated `cust_...` from `/bin/id`, cites matching `/proc/baskets/...` refs, checks out exactly one active authenticated basket via `/bin/checkout`, and otherwise returns clarification with candidate refs.
+  - Checkout helper fix for `t21,t34,t36,t41`: added `checkout_basket_answer()` for explicit submit-checkout tasks. It gates third-party ownership before already-checked-out status, blocks queue-save/counter-ready/manual-close bypass requests as unsupported, and avoids `/bin/checkout` unless gates pass. Refined 3DS recovery classification so generic "blocked" wording no longer forces lockout, while explicit lockout/no-retry or next-day recovery timestamps remain unsupported.
+  - Follow-up for `t21,t34`: `checkout_basket_answer()` now treats ordinary active submit-checkout as `OUTCOME_NONE_UNSUPPORTED` without calling `/bin/checkout`, preventing unintended checkout mutations. Third-party checkout denials still read the named basket to prove ownership mismatch, but remove that third-party basket path from final refs because the evaluator marks it invalid.
+  - Claim-check fix for `t07,t08`: `catalog_claim_check_answer()` now normalizes ordered `extra_properties` by promoting all but the final property to base selectors when the model accidentally puts the whole property list there, while preserving explicit base/extra conflicts such as `surface=glass` vs `surface=stone`. Structured property matching now prefers actual property values over loose full-record text so one field cannot satisfy another field by coincidence.
+  - Count-update/doc handling fix for `t10,t11`: `current_update_refs()` now looks in update/addenda/policy/ops doc roots, filters to catalogue/reporting/count docs for the requested kind, and avoids unrelated discount/security/checkout refs. `catalog_count_update_adjustment()` now parses explicit count/answer/return/report override wording plus SKU include/exclude lists as general count overrides/deltas.
+  - Count-update diagnostic follow-up: when a relevant count doc is found but no parser rule applies, `catalog_count_update_adjustment()` now records `mode="unparsed_relevant_doc"` with a short sanitized `doc_excerpt` in `current_update_evidence`. Rerun `t10,t11` and inspect those excerpts before adding the next general parser rule.
+  - Count-update city-inventory fix: when a relevant count doc says to count only catalogue SKUs in a city/location with positive `available_today`/stock, `catalog_count_update_adjustment()` now derives the city from the doc/path/task context and computes `COUNT(DISTINCT p.sku)` by joining `products` to `inventory` for that city scope.
+  - Archived payment fraud helper: added `archived_payment_fraud_answer()` for `t38,t39,t40`-style tasks. It avoids slow/flaky `/proc/payments` listing/tree/search, loads the indexed `payments` SQL table, selects the strongest archived paid-payment cluster with repeated payment-method/device fingerprints across customers/stores, and submits exact `/proc/payments/pay_*.json` refs without modifying files.
+  - Follow-up log read for `t38,t39,t40`: the helper routed, but Python bootstrap generation failed because `"\n".join(answer_ids)` in the TypeScript template emitted a literal newline inside the Python string. Escaped it as `"\\n".join(answer_ids)`.
+  - Archived payment fraud scoring follow-up: latest run recovered only the seed repeated-fingerprint cluster with zero false positives (`5/18` and `6/22`). Updated `archived_payment_fraud_answer()` to expand the high-confidence seed to the surrounding archived paid-payment incident time burst (bounded 5 minutes before/after seed timestamps, capped at 60 records) to recover adjacent incident records while avoiding broad `/proc/payments` scans.
+  - Archived payment fraud expansion follow-up: latest run improved to `10/18` on `t38/t39` and `12/22` on `t40`, still with zero false positives. Remaining loss is likely under-expansion, so `_expand_payment_incident_burst()` now uses a bounded 10-minute window before/after the seed cluster while preserving the 60-record rejection guard.
+  - Archived payment fraud fallback follow-up: latest `t38` variant had `21` expected fraud payments but no repeated payment/device fingerprint cluster, so the helper submitted no payment refs and scored `0`. Added fallback detection for unique-fingerprint incidents using bounded shared 3DS anomaly signatures first, then dense archived paid-payment time windows; this fallback only runs when the stronger repeated-fingerprint seed is absent.
+  - Archived payment fraud fallback refinement: latest `t38` still scored `0` because fallback detection looked only at paid-like archived payments. Generalized the fallback to all archived payment records so confirmed fraud incidents with declined/failed/3DS statuses are considered, while keeping the primary repeated-fingerprint seed on archived paid-like records.
+  - Archived payment fraud fallback refinement after latest `t38`: helper still found no cluster, while `t39/t40` stayed stable. Added an observed-geo fallback for unique-fingerprint incidents: group bounded archived payments by coarse `observed_lat/observed_lon` across multiple customers/stores before falling back to time-density. Also updated the prompt to discourage slow `/proc/payments` tree/list/search exploration and rely on the SQL helper.
+  - Organizer hint for fraud tasks: data contains enough information, but the agent must investigate simple patterns. Implemented `_payment_investigation_cluster()` as a SQL-only fallback for archived payment fraud: after repeated-fingerprint/3DS/geo checks, it ranks bounded candidate clusters across archived scope first and all-history scope second using repeated customer/basket actor groups, anomalous status/failure groups, repeated amount/currency groups, breadth across customers/stores, amount, and time density. This replaces manual slow `/proc/payments` exploration with reusable investigation logic.
+  - Archived payment fraud routing fix after latest run: `t38` regressed to `OUTCOME_DENIED_SECURITY` because the model treated the benchmark wrapper label `<task-system-prompt>` as prompt injection, even though the actual task text was normal. Updated `security_denial_answer()` to delegate wrapper-tag false positives on archived-payment fraud tasks back to `archived_payment_fraud_answer()`, and clarified prompt/tool/contract text that context wrapper labels are framework delimiters, not task-content injection.
+  - Archived payment fraud investigation refinement after latest `t38`: routing was fixed, but fallback selected a broad `status=requires_3ds_action` group of 40 clean payments, causing 40 false positives and 0 recovered fraud records. Added `_payment_has_correlated_signal()` and required broad status/3DS-status/failure groups to have a second signal (tight time density, repeated actor/fingerprint/basket/amount, or shared observed geo) before submission; status-like groups are also down-weighted so they support but do not dominate candidate ranking.
+  - Archived payment fraud diagnostics follow-up: broad status/3DS/failure groups are now diagnostic-only and no longer eligible as `_payment_investigation_cluster()` submit candidates. Added compact fraud diagnostics to `archived_payment_fraud_answer()` fallback/no-cluster evidence: top repeated groups by fingerprint, customer, basket, store, status, 3DS fields, amount/currency, observed geography, dense time windows, and payment-id sequence patterns with sample payment ids only and no card data.
+  - Archived payment fraud weak-actor refinement after focused `t38,t39,t40`: latest `t38` no longer submitted the 40-record 3DS-action bucket, but still selected a long-span `customer_id=cust_093` all-history cluster with 5 false positives. Added `_payment_actor_group_is_submit_candidate()` so customer/basket fallback clusters must be tight incident bursts (`<=30` minutes in all-history scope, `<=120` minutes in archived scope) and have breadth before submission; long-span same-customer/basket history remains diagnostic-only.
+  - Archived payment fraud manual-submission guard after latest `t38`: helper correctly returned no confident cluster, but the model manually selected the largest archived store diagnostic group and produced 6 false positives. `archived_payment_fraud_answer()` now submits `OUTCOME_NONE_UNSUPPORTED` with `NO_CONFIDENT_FRAUD_CLUSTER` and diagnostics when no approved cluster exists, and central `ws.answer()` rewrites manual archived-fraud `OUTCOME_OK` submissions unless `fraud_payment_evidence.mode` comes from an approved detector. Store-only/status-only/long-span actor diagnostics can no longer become fraud refs by hand.
+  - Archived payment fraud investigation upgrade after safe `t38` unsupported result: added schema-aware payment loading that introspects `payments` columns and selects all non-sensitive fields while excluding card/cardholder/CVV/expiry-like columns. Added `_payment_semantic_marker_cluster()` to detect explicit runtime fraud/risk/chargeback/dispute/incident marker fields before weaker pattern fallbacks, and diagnostics now include visible non-sensitive columns plus marker columns so future investigation can improve without answer-key totals or hardcoded payment IDs.
+  - Archived payment fraud cross-field investigation follow-up: added `_payment_paid_mirror_cluster()` for paid rows that mirror adjacent/later 3DS-action rows by sequence or shared non-sensitive attributes, and `_payment_sequence_intersection_cluster()` for sequence-modulo/status/3DS intersections. These run after explicit semantic markers and before broad 3DS/geo/actor fallbacks, preserving the no-card-data and no-answer-key constraints.
+  - Archived payment fraud expansion follow-up after latest `t38,t39,t40`: replaced fixed before/after seed expansion with adaptive contiguous archived paid-payment burst expansion. `_expand_payment_incident_burst()` now starts from the repeated-fingerprint seed, walks left/right in payment-time order while adjacent records remain within a 10-minute gap, caps the expanded incident at 60 records, and keeps the fixed-window fallback only when seed rows cannot be aligned to the archived paid timeline.
+  - Archived payment fraud all-status burst follow-up: added `_expand_payment_incident_all_status_burst()` as a second-stage expansion after the paid repeated-fingerprint burst. It uses the paid burst as a strong anchor, walks the full archived payment timeline while adjacent gaps stay within 10 minutes, includes nearby failed/declined/3DS rows from the same incident, and rejects broad/long-span candidates without using expected answer counts.
+  - Payment/return status helper after latest `t35,t43,t44`: added `payment_return_status_answer()` for read-only payment status, refund approval, and return/refund requests. It reports terminal payment status such as `paid` for already-complete stuck-3DS cases, treats refund execution/approval as `OUTCOME_NONE_UNSUPPORTED`, cites `/docs/returns.md` for refund/return tasks, and never writes or executes a refund. The central unsupported-answer path now also adds returns refs/policy for manual refund/return scratchpads.
+  - Payment/return follow-up after latest `t43,t44`: central `ws.answer()` now rewrites manual refund/return clarifications to `OUTCOME_NONE_UNSUPPORTED` with returns refs, since missing refund execution capability is not a clarification gap. `payment_return_status_answer()` now searches `/proc/returns` for records tied to an explicit payment id and cites matching `ret_*.json` refs.
+  - Payment/return approval follow-up after latest `t43,t44`: matching return refs were found, and evaluator expected `OUTCOME_OK`. `payment_return_status_answer()` now treats an explicit payment with a matching `/proc/returns/ret_*.json` as actionable, attempts likely runtime tools (`/bin/refund`, `/bin/returns`, `/bin/return`) with structured payloads, cites the accepted tool when available, and returns `OK`/`OUTCOME_OK` without direct file writes. Manual refund clarifications with explicit payment ids and matching return refs are normalized to `OUTCOME_OK`.
+  - Payment/return command-schema follow-up: logs revealed `/docs/returns.md` specifies `/bin/payments approve-refund <return_id>` and `/bin/payments refund <return_id>`. The helper now attempts those documented commands first, fixes `_return_records_for_payment()` to always return record dicts, and can resolve generic “refund my EUR X purchase” requests by matching authenticated customer id plus amount against `/proc/returns`.
+  - Payment/return policy-gate follow-up: `payment_return_status_answer()` now accepts `return_id`, reads explicit `/proc/returns/ret_*.json` records, and requires `refund_manager` for approval/finalization/refund actions. Unauthorized explicit return approval now returns `OUTCOME_DENIED_SECURITY` with returns/security/return refs instead of unsupported. Prompt/tool/contract text now reflects the policy-gated flow.
+  - Payment/return customer-request refinement: focused `t43` showed customer "refund my payment" requests should not be security-denied for lacking `refund_manager`; only explicit internal approval/finalization wording requires that role. The helper and central guard now gate on `approve`/`approval`/`finalize`/`finalise`, not the generic word `refund`.
+  - Payment/return status eligibility refinement after latest `t43,t44`: generic "refund my purchase for EUR X" now resolves return refs through direct return amount/customer evidence and linked payment evidence, but stays read-only/unsupported unless a customer-facing refund capability exists. Explicit approval/finalization now requires `refund_manager`, checks return status for terminal/already-pending/ineligible states before `/bin/payments`, and only returns `OUTCOME_OK` when the supported runtime command accepts the action. Manual refund clarifications with matching return refs now normalize to unsupported instead of assuming a state mutation is authorized.
+  - Payment/return helper routing fix after latest focused `t43,t44`: latest `t44` proved explicit `return_id` records were being overwritten by the generic customer/amount lookup, so `payment_return_status_answer()` now preserves explicit return/payment-derived records. Prompt/tool/contract guidance now says refund/return tasks must call `payment_return_status_answer()` first and not hand-write refund scratchpads, preventing `t43`-style verify loops after central safety normalization.
+  - Payment/return central guard fix after latest focused `t43,t44`: `_return_action_kind()` now uses string checks instead of regex word-boundaries so the TypeScript template cannot corrupt Python regex escapes. The central refund/return `ws.answer()` guard now resolves amount/customer return refs for manual scratchpads and switches to terminal verification after normalizing clarification/unsupported outcomes, preventing stale custom verifiers from blocking a valid terminal answer.
+  - Payment/return follow-up after latest `t43,t44`: fixed linked payment discovery inside return records by replacing the template-fragile raw `pay_\d+` regex with `pay_[0-9]+`; statuses containing replacement workflow terms are now refund-ineligible so approval/finalization returns `OUTCOME_NONE_UNSUPPORTED` before `/bin/payments`.
+  - Payment/return evidence follow-up after latest `t44`: explicit `ret_XXX` tasks now extract linked `pay_[0-9]+` ids from the return record and cite `/proc/payments/pay_*.json` in both `payment_return_status_answer()` and the central manual-refund guard, preserving unsupported outcomes while satisfying evaluator evidence refs.
+  - Dynamic policy-helper follow-up for focused `t26,t27,t28,t30,t31,t41`: added `discount_policy_facts()`, `discount_store_refs_from_task()`, positional `/bin/discount` execution with JSON fallback, and `payment_verification_policy_facts()` / `payment_safety_decision()` so discount and 3DS helpers derive decisions from docs, current updates, task text, and runtime records instead of fixed assumptions. Focused rerun fixed `t28` but showed `t26` still routed to manual clarification and 3DS security classification was too broad.
+  - Follow-up fix for that focused run: added `discount_last_checkoutable_basket_answer()` to resolve exact customer email + current employee store scope + last checkoutable basket before delegating to `discount_request_answer()`. Refined `payment_safety_decision()` so future recovery windows become unsupported, now/past recovery windows become OK, recoverable `requires_3ds_action` is OK when no strong security marker exists, and 3DS security denials omit `/proc/baskets/...` refs while keeping payment/security evidence.
+  - Doc-derived policy follow-up after latest focused run: `discount_policy_facts()` now parses numeric and worded percentage caps (`5%`, `5 percent`, `five percent`, `pct`, capped/limit/no-more-than phrasing) and returns `parse_status="unparsed_relevant_policy"` with doc excerpts instead of defaulting service_recovery to 10%. `discount_request_answer()` refuses to apply a guessed discount when relevant policy docs are unparsed. `payment_verification_policy_facts()` now extracts recovery commands from policy docs (`/bin/checkout`, `/bin/payments ...`) and `checkout_3ds_answer()` executes only doc-derived recovery commands for ready checked-out 3DS flows; if none is parsed, it returns unsupported diagnostics. 3DS security denials now omit all `/proc/...` refs and cite policy refs only.
+  - 3DS recovery follow-up after latest focused `t27,t30,t31`: added retrying `_read_json_with_retries()` for critical basket/payment reads to handle transient workspace EOFs. `payment_verification_policy_facts()` now parses `/bin/payments ... <payment_id>` before checkout commands and ignores negated lines such as "do not run /bin/checkout". `execute_payment_recovery_action()` skips `/bin/checkout` for payment-specific 3DS recovery, and `payment_safety_decision()` checks authenticated customer ownership before recovery.
+  - Discount/3DS parser follow-up after latest focused run: `discount_policy_facts()` now computes basket subtotal and applies subtotal-gated discount tiers from docs (for example `1 to 10 percent when basket subtotal is at least 15000 cents`, otherwise `1 to 5 percent`). `payment_verification_policy_facts()` now strips markdown, scans compact whole-doc text, ignores `/bin/date` and negated command mentions, and recognizes `recover-3ds` instructions so `/bin/payments recover-3ds <payment_id>` can be derived even when the doc command is inline.
+  - Catalogue claim-check refinement for `t32`-style support notes: tightened structured property matching so enum-like fields and clothing sizes use exact token matching instead of substring matching. `XL` no longer matches `3XL`/`XXL`, and size synonyms (`size`, `size_code`, `clothing_size`, `trouser_size`, etc.) resolve against the actual product property before any fallback text evidence.
+  - Verified `npm.cmd run typecheck` and `npm.cmd run build`.
+
+#### Decisions made
+
+**D1 — Helper contract is now a first-class project artifact.**
+Rationale: Prompt/helper drift was a real risk. Future helper signature or return-shape changes should update `docs/HELPER_CONTRACT.md`, `agent/system-prompt.ts`, and the tool description together.
+
+**D2 — Prefer answer helpers for repeated terminal workflows.**
+Rationale: The agent often finds enough evidence but fails to finalize. Helpers that populate scratchpad and call `ws.answer()` reduce late-turn no-answer failures.
+
+**D3 — Task timeout must abort active work.**
+Rationale: `Promise.race()` alone returns a timeout result but leaves LLM/Docker work alive. Timeouts now abort active fetches and kill active Docker exec calls.
+
+#### What is left to do
+
+- [x] Run `npm.cmd run typecheck` and `npm.cmd run build` after these edits.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t26,t27,t28,t30,t31,t41 --concurrency=1` to verify the dynamic discount/3DS helper refinements.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t23,t24,t25,t42 --concurrency=1` to confirm security/discount refs and delegated t42 behavior stay correct.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t38,t39,t40 --concurrency=1` and inspect `fraud_payment_evidence.diagnostics`, especially `t38`, before adding another fraud selector.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t43,t44 --concurrency=1` to verify generic refund requests cite matching return refs and approval tasks do not mutate unsupported return statuses.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t32 --concurrency=1` to verify support-note catalogue claim checks cite the exact checked size/color SKU.
+- [ ] Run a focused dev bench sample covering inventory availability and buy-max-across-stores tasks.
+- [ ] Add helper-level tests for `detect_answer_format`, `format_answer`, `catalog_answer_existence`, and inventory helpers.
 
 ---
 
