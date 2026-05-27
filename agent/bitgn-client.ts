@@ -102,7 +102,7 @@ export class BitGNClient {
    * process. The caller must iterate trialIds and call startTrial / endTrial
    * for each, then call submitRun when all are done.
    */
-  async startRun(benchmarkId: string, runName = "BitGN Ecom TS Agent"): Promise<BitGNRunStarted> {
+  async startRun(benchmarkId: string, runName = "BitGN @Nat80ai"): Promise<BitGNRunStarted> {
     const body = {
       name: runName,
       benchmarkId,
