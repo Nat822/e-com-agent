@@ -13,16 +13,24 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
 - `has_text(record, *terms) -> bool`: all normalized terms appear in `blob_text(record)`.
 - `verify(sp) -> bool`: default final-answer verifier.
 - `detect_answer_format(task_text, default="PLAIN") -> str`: returns `ANGLE_BINARY`, `ANGLE_COUNT`,
-  `ANGLE_BINARY_WITH_SKU`, `QTY_BRACKET`, `COUNT_LABEL`, or `PLAIN`. It also consults
+  `LOWER_ANGLE_COUNT`, `LOWER_ANGLE_COUNT_COMPACT`, `ANGLE_LABEL_COUNT:<LABEL>`,
+  `ANGLE_LABEL_COUNT_COMPACT:<LABEL>`, `KEY_VALUE_COUNT:<label>`, `ANGLE_BINARY_WITH_SKU`,
+  `TEXT_COUNT:<prefix>:<suffix>`, `QTY_BRACKET`, `QTY_ANGLE`, `COUNT_LABEL`, or `PLAIN`. It also consults
   `scratchpad["task_instruction"]`, which the TypeScript runner injects before each
   `execute_code` call, so abbreviated model-side task strings still inherit the exact requested
   answer format.
 - `parse_task_contract(task_text=None) -> dict`: lightweight task-contract detector. It reads the
   original task text and identifies high-risk cases where a familiar domain task requires a
   different answer or ref shape, such as archive TSV fraud-total tasks and pasted product quote TSV
-  tables. Use it before selecting a family helper when the output format/ref requirements are
+  tables. It also detects dispatch-wave planning, scoped `/tmp` cleanup, employee-role counts,
+  open branch lists, exact basket/product/store field lookups, and current employee profile
+  lookups. Use it before selecting a family helper when the output format/ref requirements are
   unusual.
 - `format_answer(value, answer_format) -> str`: formats values for the supported answer formats.
+  Count tokens are literal: `<COUNT:%d>` formats as `<COUNT:n>`, compact `<count:NUMBER>` formats
+  as `<count:n>`, spaced lowercase templates such as `<count: NUMBER>` or `<count: %VALUE%>` format
+  as `<count: n>`, compact custom angle labels such as `<total:%VALUE%>` format as `<total:n>`, and
+  spaced custom angle labels such as `<ANSWR: %VALUE%>` format as `<ANSWR: n>`.
 - `format_money_eur(cents) -> str`: formats integer cents as `EUR x.xx`.
 - `format_binary_answer(ok, sku=None, answer_format="ANGLE_BINARY") -> str`: returns `<YES>`/`<NO>`
   or `<YES> SKU`/`<NO> SKU` for `ANGLE_BINARY_WITH_SKU`.
@@ -30,6 +38,7 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
   `/proc/catalog/SKU.json`.
 - `sanitize_refs(refs, allow_shallow_catalog_refs=False) -> list[str]`: deduplicates refs and
   removes shallow catalogue refs unless a deterministic helper marks them as required proof.
+  Bare `store_...` ids are normalized to canonical `/proc/stores/<store_id>.json` refs.
   The central answer guard also filters shallow catalogue refs on single-store inventory count
   answers so only SKUs that actually contributed to the count may keep shallow proof refs.
 - `canonical_catalog_ref(sku=None, path=None) -> str | None`: resolves SQL product paths to valid
@@ -43,7 +52,41 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
   refs and, when a deterministic helper needs the checked/counting SKU as proof, may preserve the
   SQL row's shallow `/proc/catalog/SKU.json` path alongside the deep ref because evaluator variants
   can require either runtime proof path.
-- `canonical_store_ref(store_id) -> str | None`: resolves store IDs to store JSON refs.
+- `canonical_store_ref(store_id) -> str | None`: resolves store IDs to store JSON refs. It supports
+  `/proc/stores` and `/proc/locations` layouts. Id helpers normalize hyphenated and underscored ids
+  such as `basket-0026`/`basket_0026` and `pay-0035`/`pay_0035`.
+- `workspace_bootstrap_context(read_docs=False) -> dict`: reads the workspace `/AGENTS.md`
+  when present, captures `tree -L 2 /docs` via the runtime tree API, records `/bin/id`
+  identity output, and records visible `/bin/sql` table names. Terminal helpers call this
+  before family-specific work so organizer-stable workspace instructions, docs, identity,
+  and SQL capabilities are available in scratchpad diagnostics.
+- `sql_table_exists(name) -> bool` and `sql_query_or_none(query) -> str | None`: SQL
+  capability wrappers. Helpers must not require a table to exist; missing `products`,
+  `product_kinds`, `inventory`, or `payments` is normal and should trigger `/proc` JSON
+  fallback evidence rather than an exception.
+- SQL adapters inspect `sqlite_schema`/`PRAGMA table_info` dynamically and prefer current
+  runtime projections when present: `product_variants`, `product_variant_properties`,
+  `store_inventory`, `payment_transactions`, and `stores`. Generated code should keep using
+  terminal helpers rather than issuing fixed `SELECT ... FROM products|inventory|payments`
+  queries.
+  Store lookup prefers the actual `stores` metadata table over inventory-like projections, and
+  product lookup uses broad SQL candidates scored in Python before bounded `/proc` fallback.
+- `discover_runtime_model(force=False) -> dict`: builds the per-task hybrid runtime model. It
+  keeps full SQL table/column discovery in process memory and records only
+  `runtime_data_model_summary` in scratchpad. The model includes `/bin/id`, SQL tables/columns,
+  semantic table candidates for products, product properties, product kinds, inventory, stores,
+  payments, returns, and baskets, plus compact docs/rule facts.
+  Table selection is score-based, not name-fixed, so renamed projections can still be used before
+  `/proc` fallback.
+- `discover_runtime_rules(terms=None, domains=None, limit=20, read_docs=True) -> list[dict]`:
+  selects relevant `/docs` rules, classifies domains such as security, discount, checkout, payment,
+  returns, catalogue, and operations, and ranks rules by specificity. Specific scoped/current/security
+  rules outrank general guidance; unresolved conflicts choose the safer non-mutating outcome.
+- `semantic_sql_table(role) -> dict | None`: returns the highest-scoring runtime SQL table for a
+  semantic role. Durable helpers use this rather than hardcoded table names.
+- `proc_walk_json(root="/proc", terms=None, max_files=500) -> list[str]` and
+  `proc_read_json(path) -> dict | None`: bounded `/proc` JSON discovery/read helpers.
+  `/proc` JSON is the durable source of truth; `/bin/sql` is only an optional accelerator.
 - `find_relevant_docs(terms=None, date_hint=None, roots=None, limit=20, read_candidates=False)
   -> list[str]`: recursively scans `/docs` and returns markdown docs whose path/name, and
   optionally content, matches task/domain terms and date hints.
@@ -89,9 +132,11 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
   tasks, reports terminal payment status such as `paid` for stuck 3DS/payment-status cases, and
   resolves generic customer refund requests from authenticated customer id plus requested amount,
   including linked payment evidence. Customer-facing amount-only and explicit payment/return refund
-  requests cite matching return/payment candidates; they remain `OUTCOME_NONE_UNSUPPORTED` unless
-  returns docs positively expose a supported customer-facing refund mutation that does not require
-  `refund_manager`. Runtime refund command success alone is not authorization. Explicit employee
+  requests cite matching return/payment candidates. Amount-only inferred matches may execute all
+  eligible matched candidates only when returns docs positively expose a supported customer-facing
+  refund mutation, or describe an eligible customer-request status plus `/bin/payments refund`, without
+  requiring `refund_manager`, and every runtime refund command succeeds;
+  otherwise they remain `OUTCOME_NONE_UNSUPPORTED`. Runtime refund command success alone is not authorization. Explicit employee
   approval/finalization requests require
   `refund_manager`, check return-status
   eligibility, and only then attempt `/bin/payments approve-refund <return_id>` or
@@ -155,7 +200,8 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
 - `unsupported_answer(reason, refs=None, policy_citation=None, submit=True)`.
 - `archived_payment_fraud_answer(policy_citation=None, submit=False) -> dict`: deterministic
   helper for archived payment-history fraud-identification tasks. It uses `/bin/sql` over the
-  indexed `payments` table, avoids slow `/proc/payments` traversal, selects the strongest archived
+  indexed `payments` table when available and falls back to bounded sanitized `/proc/payments`
+  JSON reads when SQL has no `payments` table, selects the strongest archived
   paid-payment cluster with repeated payment-method/device fingerprints across customers/stores,
   expands that verified seed to the surrounding bounded archived paid-payment incident burst by
   walking the archived paid-payment timeline left/right while adjacent records remain within a
@@ -182,17 +228,19 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
   fraud/risk marker evidence passes the submit gate. Repeated-fingerprint seeds may be extended by
   a guarded second-wave profile detector: additional rows must be archived paid, outside the seed
   burst, inside the seed store set, inside an expanded seed amount range, and part of a compact
-  second-wave time component. The expanded range adds 50% of the seed amount width on both sides,
+  second-wave time component. When several separated profile components exist, the helper selects
+  the strongest compact component and keeps other valid components as diagnostics instead of letting
+  their combined long span reject the accepted wave. The expanded range adds 50% of the seed amount width on both sides,
   with a minimum width of 1000 cents, and applies only to second-wave extension, not seed detection.
   A one-record tail component may be included only when it passes the same row filters and falls on
-  the same calendar day as an accepted second-wave component. Same-day stragglers are reported as
-  diagnostics and are not submitted automatically.
-  If no identifier/fallback cluster exists, a last-resort archived-paid population-anomaly detector
-  may submit the bounded archived-paid population only when all four profile ratios pass: low median
-  amount, high top-store concentration, short average gap, and high repeated-amount share versus
-  non-archived rows, and the population submit review is `ok`. Repeated-fingerprint evidence reports
-  submitted-row `amount_cents` and keeps the seed-only amount as `seed_amount_cents` for expansion
-  diagnostics. If no high-confidence cluster is found, the helper submits
+  the same calendar day as an accepted second-wave component. Same-day stragglers may be submitted only
+  when they are still in the seed store set, inside the expanded seed amount range, and within 20 minutes
+  after the accepted wave; any remaining stragglers stay diagnostic.
+  Archived-paid population-anomaly reports are diagnostic-only ratio reports: they record bounded
+  archived-paid size, identifier checks, and archived-vs-non-archived ratio checks, but do not
+  submit refs without a concrete record-level detector.
+  Repeated-fingerprint evidence reports submitted-row `amount_cents` and keeps the seed-only amount
+  as `seed_amount_cents` for expansion diagnostics. If no high-confidence cluster is found, the helper submits
   `OUTCOME_NONE_UNSUPPORTED` with answer `NO_CONFIDENT_FRAUD_CLUSTER`, `/bin/sql`/security refs,
   and diagnostics instead of raising a verification error or letting diagnostic-only groups become
   payment refs. The central `ws.answer()` guard also rewrites manual archived-fraud `OUTCOME_OK`
@@ -204,9 +252,10 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
   fraud-selection pipeline, sums selected amounts, formats the answer as `EUR x.xx`, and cites
   row-anchor refs shaped like
   `/archive/file.tsv#row=<RowID>`. Archive TSV fallback review is stricter than normal payment-id
-  review: low-value single-customer velocity bursts do not pass on repeated customer, repeated geo,
-  concentrated spread, or tight time alone; they need semantic markers or non-tautological
-  corroboration such as a second fingerprint/amount pattern or a meaningful multi-customer campaign.
+  review: low-value single-customer velocity or dense-time bursts do not pass on repeated customer, repeated geo,
+  concentrated spread, or tight time alone; repeated payment-method/device fingerprint clusters also need
+  independent non-tautological corroboration. A large or multi-customer campaign amount is diagnostic context,
+  not a bypass for missing corroboration.
 - `product_quote_table_answer(submit=False, policy_citation=None) -> dict`: terminal helper for
   pasted product quote/list tasks that require a tab-separated table. It parses task rows, resolves
   each product against the catalogue/inventory helpers, checks the current employee store when
@@ -222,10 +271,47 @@ the tool description in `agent/index.ts`, and the Python bootstrap in
   otherwise SKU and stock stay blank with `match=false`.
 - `contract_task_answer(submit=False, policy_citation=None) -> dict`: routes
   `parse_task_contract()` results to durable contract-specific helpers such as
-  `archive_payment_fraud_total_answer()` and `product_quote_table_answer()`. If it returns
+  `archive_payment_fraud_total_answer()`, `product_quote_table_answer()`,
+  `receipt_price_delta_answer()`, company-lore fact lookup, physical-vs-available inventory counts,
+  same-day SKU-list inventory counts, product-count-by-price requests, dispatch/cleanup/employee/store
+  field helpers, named store-manager email verification, SKU/code-only catalogue lookups, description-based
+  product field lookups, and exact record-field helpers. If it returns
   unsupported, generated code should define a small local helper inside the same `execute_code`
   call: parse the required output/ref contract first, gather facts second, render exactly third,
   and submit immediately.
+- `receipt_price_delta_answer(threshold_eur=None, submit=False, policy_citation=None) -> dict`:
+  terminal helper for uploaded old-receipt price comparison tasks under `/uploads`. It reads the
+  receipt, extracts the subtotal excluding VAT and SKU lines, renders `<YES>`/`<NO>`, cites the
+  uploaded receipt, and supplies the search/reasoning fields required by `verify()`.
+- `company_lore_fact_answer(question=None, submit=False, policy_citation=None) -> dict`: searches
+  `/docs` for requested PowerTools history/lore date facts, extracts a nearby date, renders
+  `YYYY-MM-DD`, and cites the source doc. Use it through `contract_task_answer()` for exact detail
+  company-history questions.
+- `dispatch_wave_plan_answer(path=None, submit=False, policy_citation=None) -> dict`: reads the
+  dispatch wave markdown plus package/lane TSVs and emits JSON assignments with lane-id routes.
+- `tmp_cleanup_answer(root=None, submit=False, policy_citation=None) -> dict`: performs scoped
+  `/tmp/...` cleanup only under the requested root and returns deleted paths sorted.
+- `employee_role_count_answer(role, location_hint=None, submit=False, policy_citation=None) -> dict`:
+  counts employee records by role under `/proc/staff`, `/proc/employees`, or `/proc/users`,
+  optionally scoped to a resolved branch, and cites counted employee records plus the branch ref.
+- `open_branch_list_answer(submit=False, policy_citation=None) -> dict`: resolves a base store/city
+  and lists open PowerTools branch names in that city, citing checked store records.
+- `record_field_answer(...)`, `catalog_field_answer(...)`, `store_field_answer(...)`, and
+  `current_employee_profile_answer(...)`: terminal helpers for exact field-value lookup tasks.
+  Product field lookups tolerate `/proc/products/...` as well as `/proc/catalog/...`; employee
+  profile lookup tolerates nested `/proc/staff/<store>/emp-*.json`.
+- `employee_manager_email_answer(person_name=None, store_hint=None, submit=False, policy_citation=None) -> dict`:
+  resolves the store, scans `/proc/staff`, `/proc/employees`, and `/proc/users`, verifies the named
+  employee is the resolved store manager, and returns the direct/work email only when confirmed.
+- `catalog_product_count_answer(question=None, answer_format=None, submit=False, policy_citation=None) -> dict`:
+  handles free-text product-count requests with an EUR price ceiling, returning a verified zero count
+  with checked refs/search trail when no candidate remains under the price limit.
+- `catalog_sku_lookup_answer(question=None, submit=False, policy_citation=None) -> dict`: terminal helper
+  for SKU/product-code tasks. It returns the SKU only when one runtime catalogue product is the unique best
+  match, otherwise returns clarification with candidate refs instead of binary yes/no output.
+- `catalog_field_by_description_answer(question=None, field=None, submit=False, policy_citation=None) -> dict`:
+  resolves a product description to one catalogue product and returns the requested exact field, such as
+  `category_id`; ambiguous descriptions clarify with candidate refs.
 
 These populate the scratchpad and submit through `ws.answer()` by default. They are intended for
 terminal blocked outcomes, especially prompt injection, missing required identifiers, and missing
@@ -236,7 +322,8 @@ when it exists. `discount_request_answer()` checks `/bin/id`, denies unless the 
 `discount_manager`, `discount_policy_facts()` finds a scoped positive delegation grant, or
 `active_discount_delegation()` finds a matching active employee delegation update, and never edits
 basket JSON directly. It derives the policy maximum from docs/updates and
-uses that maximum for "largest/maximum allowed" requests; explicit over-max requests are security
+uses that maximum for "largest/maximum allowed", "max applicable", and "whatever percent the policy
+allows" requests; explicit over-max requests are security
 denials. If a relevant policy is present but the maximum cannot be parsed, it returns a diagnostic
 unsupported result instead of applying a guessed amount. When authorized, it calls `/bin/discount`
 with basket id, percent, reason code, and issuer id, falling back to the older JSON payload only if
@@ -254,11 +341,19 @@ keep their required proof trail.
 - `catalog_count_by_kind_phrase(kind_phrase) -> int`.
 - `catalog_answer_count(kind_phrase, policy_citation=None, city_hint=None,
   answer_format="ANGLE_COUNT", submit=False) -> dict`.
-- `catalog_product_rows(...) -> list[dict]`.
-- `catalog_product_rows_broad(required, limit=200) -> {"rows": list, "sql_trace": list}`.
+  If `answer_format` is omitted or left as the default, the helper re-detects the exact task
+  instruction format and will honor custom count wrappers such as `<ANSWR: %VALUE%>`. The returned
+  dict includes top-level `refs`, `answer`, `outcome`, `policy_citation`, `current_update_evidence`,
+  and `scratchpad`, so non-submitting callers can preserve required docs.
+- `catalog_product_rows(...) -> list[dict]`: uses SQL `products` only when available, then
+  falls back to current SQL projections such as `product_variants` and then bounded
+  `/proc/catalog` JSON product rows normalized to the same shape.
+- `catalog_product_rows_broad(required, limit=200) -> {"rows": list, "sql_trace": list}`:
+  uses schema-adaptive SQL when available and `/proc/catalog` fallback when product SQL is absent.
 - `catalog_score_product(record, required) -> {"ok": bool, "checks": dict}`.
 - `catalog_score_product_v2(record, required) -> {"ok": bool, "score": int, "checks": dict}`.
-- `catalog_find_matching_products(required, limit=100) -> dict`.
+- `catalog_find_matching_products(required, limit=100) -> dict`: returns `matches`/`close` entries
+  with both nested `record` and top-level `sku`, `path`, and `refs` fields.
 - `catalog_answer_existence(required, policy_citation=None, answer_format=None, submit=False,
   limit=200) -> dict`.
 - `catalog_claim_check_answer(base_required, extra_properties=None, policy_citation=None,
@@ -280,10 +375,30 @@ Enum-like product properties are token-exact, especially clothing sizes and shor
 does not match `3XL`, while `Yellow XL` can satisfy separate `color_family=Yellow` and `size=XL`
 selectors on the same record.
 
-For catalogue count tasks, `catalog_answer_count()` first counts runtime SQL products by kind, then
-applies matching dated current-update/addenda docs when they explicitly override or adjust the count.
+For catalogue count tasks, `catalog_answer_count()` first discovers matching dated count/reporting
+docs, then counts runtime SQL products by kind, then applies matching dated current-update/addenda
+docs when they explicitly override or adjust the count.
 Count/reporting docs are selected by requested kind terms plus catalogue/count/reporting language;
 unrelated discount/security/checkout docs should not be cited by count helpers.
+Relevant count/reporting docs remain in final refs even when SQL fails and the helper uses a bounded
+catalogue-directory fallback.
+When SQL kind lookup fails but bounded fallback identifies a concrete
+`/proc/catalog/<category>/<kind>` directory, the helper derives `kind_id` from that directory before
+applying city-scoped positive-inventory count docs.
+When SQL kind lookup and catalogue-directory fallback cannot provide a kind id, the helper may infer
+candidate kind ids from already-selected count/reporting doc refs and content using generic
+stopword-filtered slug variants of the requested kind phrase. This inference is runtime-derived and
+must not use fixed phrase maps. If a positive city-inventory count doc is found but no kind id can be
+inferred, `current_update_evidence` records `mode="inventory_positive_city_missing_kind_id"` with
+candidate slugs and a doc excerpt.
+If the positive city-inventory SQL adjustment itself fails due runtime SQL/spool errors, the helper
+attempts a bounded file-backed inventory fallback for the resolved city stores and kind SKUs before
+falling back to the raw catalogue directory count. Successful fallback evidence uses
+`mode="inventory_positive_city_file_fallback"`; failed SQL adjustment evidence uses
+`mode="inventory_positive_city_count_failed"` and is not also reported as a generic unparsed doc.
+When SQL fails with runtime/database/spool errors, the helper also discovers and cites SQL incident
+docs by scanning relevant `/docs` and `/bin` markdown/readme content for SQL, spool/no-space,
+stale-JSON, database, and trust-SQL language; these operational refs are not filtered by product-kind terms.
 When an addendum names a catalogue `family_id` and says that family is excluded, withdrawn,
 inactive, suppressed, or non-reportable, the helper computes the affected row count from SQL and
 applies that family delta instead of trusting a loose number in prose.
@@ -291,7 +406,9 @@ When a relevant count doc cannot be parsed, `current_update_evidence` keeps a sh
 diagnostic excerpt so parser rules can be improved from runtime evidence without hardcoding task
 answers.
 Pass `answer_format=detect_answer_format(TASK_TEXT)` when the task uses plain `%d`, `<COUNT:%d>`,
-or another supported format.
+lowercase compact `<count:NUMBER>`, lowercase spaced `<count: NUMBER>` / `<count: %VALUE%>`, custom
+angle labels such as `<total:%VALUE%>` or `<ANSWR: %VALUE%>`, key-value forms such as `qty=%d`, or
+quoted text wrappers such as `Total: %d`, `%d total`, `answer=%d`, or `report count %d`.
 
 For support-note catalogue claim checks, use `catalog_claim_check_answer()` when the task says the
 base product exists but an extra catalogue claim may be absent. `base_required` should contain the
@@ -322,19 +439,45 @@ selector and only the final property remains disputed.
 
 ## Inventory helpers
 
-- `inventory_find_store_id(store_name_hint) -> str | None`.
+- `inventory_find_store_id(store_name_hint) -> str | None`: resolves against store metadata first,
+  including city/address/name hints, before any inventory-derived fallback.
 - `inventory_available(store_id, sku, min_qty=1) -> bool`.
-- `inventory_resolve_product(required, limit=80) -> dict`. Bounded SQL resolver for one product
+- `inventory_available_qty(store_id, sku) -> int | None`: checks the schema-adaptive runtime
+  inventory projection such as `store_inventory`, only uses legacy SQL `inventory` when present,
+  and falls back to bounded `/proc`
+  inventory/store JSON discovery. It tolerates accidental extra keyword arguments such as
+  `min_qty`; use `inventory_available()` for boolean threshold checks. Results are cached within a
+  single execute call so list/count helpers do not re-query the same store/SKU pair.
+- `inventory_resolve_product(required, limit=80) -> dict`. Bounded resolver for one product
   spec in an inventory count list; returns best `sku`, `path`, exact `matches`, close candidates,
   and SQL trace without calling the terminal catalogue-answer helper or runtime kind-id discovery.
+  It uses schema-adaptive broad SQL candidate retrieval before `/proc/catalog` JSON fallback when
+  product SQL is absent.
   The resolver keeps a small minimum candidate set even if a caller passes a tiny limit, because
   product families commonly contain color/size/property variants.
-- `inventory_answer_count(items, store_hint, min_qty=1, answer_format="PLAIN", submit=False,
-  policy_citation=None) -> dict`. Final refs cite products that meet the threshold and contribute to
-  the count, plus the resolved store and `/bin/sql`; unavailable checked products remain in
-  `scratchpad["inventory_details"]` but are not final refs because evaluators reject non-counted
-  product refs for threshold-count answers. If no product meets the threshold, final refs contain
-  only the resolved store and `/bin/sql`; checked product evidence remains diagnostic.
+- `inventory_answer_count(items, store_hint, min_qty=1, answer_format="PLAIN", comparison="gte",
+  submit=False, policy_citation=None) -> dict`. Final refs cite products that contribute to the
+  count, plus the resolved store and `/bin/sql`; with `comparison="gte"` contributors meet the
+  threshold, and with `comparison="lt"` contributors are below the threshold. For zero-result
+  `comparison="gte"` list counts, final refs include exact resolved checked product refs as proof
+  that the requested products were evaluated and none met the threshold. Shallow checked SKU refs
+  are kept only when no deep, family, or kind-level proof ref exists. With `comparison="lt"`, a resolved product with
+  no visible inventory row in the resolved store is treated as `available_today=0` and contributes.
+  Product resolution is cached per execute call and stock rows for all resolved SKUs at the target
+  store are fetched in one schema-adaptive inventory query before any per-SKU fallback.
+  Other non-contributing
+  checked products remain in `scratchpad["inventory_details"]` but are not final refs because
+  evaluators reject non-counted product refs for threshold-count answers.
+- `inventory_sameday_count_answer(skus, store_hint, min_qty=1, answer_format="PLAIN",
+  submit=False, policy_citation=None) -> dict`: terminal helper for explicit SKU-list wording like
+  "how many of these SKUs have at least N same-day units available". It resolves the store and product
+  refs, then delegates to the schema-adaptive batch inventory count path instead of assuming a fixed
+  table name or calling per-SKU availability loops.
+- `inventory_physical_available_count_answer(skus=None, store_hint=None, physical_min=1,
+  available_lt=1, answer_format=None, submit=False, policy_citation=None) -> dict`: terminal helper
+  for wording like "at least N units physically on hand, but fewer than N same-day units available
+  after reservations". It uses a schema-adaptive batch inventory query for all listed SKUs, then a
+  bounded `/proc` inventory fallback, and avoids calling catalogue existence once per SKU.
   Counted product refs are strict final-answer refs: the helper prefers deep catalogue
   `/proc/catalog/<category>/<kind>/<family>/<SKU>.json` paths, but also accepts a real runtime
   `/proc/catalog/<category>/<kind>/<SKU>.json` product path when no family path exists. For SKUs
@@ -344,11 +487,14 @@ selector and only the final property remains disputed.
   Unavailable checked products never add those shallow refs.
 - `buy_max_across_stores_answer(required, city_hint, exclude_store_hint="", answer_format="PLAIN",
   submit=False, policy_citation=None) -> dict`. The return dict includes top-level `refs` and
-  `scratchpad["refs"]`.
+  `scratchpad["refs"]`. If fast product resolution has no exact match, the helper submits a zero
+  total with close-candidate evidence instead of launching a slower catalogue-existence fallback.
 - `city_inventory_quantity_answer(required, city_hint, exclude_store_hint="", answer_format=None,
   submit=False, policy_citation=None) -> dict`: city-wide available-today sum helper for task
   wording like "Across every CITY branch, how many units ...". It delegates to
   `buy_max_across_stores_answer()` after deriving the answer format from task text when omitted.
+  City totals use one batch inventory query for all qualifying store IDs and the resolved SKU before
+  falling back to individual store/SKU reads.
 - `checkout_basket_answer(basket_id, submit=False, policy_citation=None) -> dict`: deterministic
   explicit basket checkout helper. It reads the named basket and applies safety gates before calling
   `/bin/checkout`: deny third-party basket checkout without citing the third-party basket in final
@@ -358,9 +504,14 @@ selector and only the final property remains disputed.
   not call `/bin/checkout`.
 - `checkout_user_basket_answer(submit=False, policy_citation=None) -> dict`: resolves "my basket"
   from authenticated `/bin/id` context only. It searches baskets for the current `cust_...`, reads
-  matching basket records, cites candidate basket refs, and calls `/bin/checkout` only when exactly
-  one active basket belongs to that authenticated customer. Zero or multiple active baskets produce
-  `OUTCOME_NONE_CLARIFICATION` with relevant candidate refs.
+  matching basket records, cites candidate basket refs, and calls `/bin/checkout` when exactly one
+  active basket belongs to that authenticated customer. For mutation requests that explicitly ask for
+  the newest/latest/most-recent active basket, multiple active baskets are allowed only when lifecycle
+  timestamps select one unique newest basket and visible line inventory is checked as available today;
+  then the helper cites candidate diagnostics plus `/bin/checkout`. Missing timestamps, ties,
+  unavailable selected lines, unknown selected-line inventory when the user says not to force
+  unavailable items, or unsupported checkout tool results produce unsupported.
+  Non-mutating ambiguity can still produce `OUTCOME_NONE_CLARIFICATION`.
 - `checkout_3ds_answer(basket_id, payment_id=None, submit=False, policy_citation=None) -> dict`.
 - `payment_return_status_answer(payment_id=None, basket_id=None, return_id=None, submit=False,
   policy_citation=None) -> dict`.
@@ -392,7 +543,8 @@ unclear.
 If the model passes an inflated placeholder such as `percent=100` for wording like "largest allowed"
 or "maximum allowed", `discount_request_answer()` clamps to the doc-derived policy maximum after
 policy facts are parsed instead of treating that placeholder as a literal over-policy request.
-This also applies to "highest policy-allowed" wording.
+This also applies to "highest policy-allowed", "max applicable", and "whatever percent the policy
+allows" wording.
 When discount docs expose tiered maximums and the basket subtotal cannot be computed, the helper may
 apply only a documented zero-floor/any-subtotal tier such as "1 to 5 percent for any basket
 subtotal"; it must not use a higher subtotal-gated tier unless the subtotal is known to satisfy it.
@@ -414,6 +566,8 @@ normalize it.
 Catalogue count update docs that say to count only SKUs in a city/location with positive
 `available_today` are applied by deriving the city from the doc path/content, then counting distinct
 product SKUs for the requested kind joined to matching inventory rows with `available_today > 0`.
+Lowercase explicit count tokens such as `<count: 8>` are parsed as count overrides when they appear
+in relevant count/reporting docs.
 Current-update and policy-update markdown reads use short retries so transient workspace TLS/EOF
 errors do not silently turn a documented scoped count into the raw catalogue SQL count.
 
@@ -437,17 +591,20 @@ resolvable from `/bin/id` customer identity plus the amount in matching
 `/proc/returns/ret_*.json` records or payment records linked from those returns. If that match is
 inferred from customer plus amount, inspect all matching return/payment candidates. If exactly one
 candidate is non-terminal and tied to a paid/captured/succeeded payment, the helper may proceed only
-when returns docs positively grant customer-facing refund authority without `refund_manager` and the
-runtime command accepts it; otherwise return
-`OUTCOME_NONE_UNSUPPORTED` while keeping candidate refs.
+when the task provides an explicit payment/order/return id, or when an amount-only customer lookup
+finds only eligible matched candidates, returns docs positively grant customer-facing refund
+authority or a customer-request eligible status plus `/bin/payments refund` without `refund_manager`,
+and the runtime command accepts every selected refund. Otherwise
+return `OUTCOME_NONE_UNSUPPORTED` while keeping candidate refs.
 Terminal/ineligible matches also return `OUTCOME_NONE_UNSUPPORTED` while keeping the same candidate
 refs.
 The helper and central guard must carry linked `/proc/payments/pay_*.json` refs extracted from those
 candidate return records, because evaluators may require both the return and payment evidence.
 A customer request to refund an explicit `pay_XXX` or `ret_XXX` should cite the payment record plus
 any matching `/proc/returns/ret_*.json` record and `/docs/returns.md`; answer `OK` with
-`OUTCOME_OK` only when returns policy docs positively grant customer-facing refund authority without
-`refund_manager`, the linked return status is not terminal or ineligible, and the supported runtime
+`OUTCOME_OK` only when returns policy docs positively grant customer-facing refund authority, or describe
+an eligible customer-request status plus `/bin/payments refund`, without `refund_manager`; the linked
+return status is not terminal or ineligible, and the supported runtime
 refund command accepts it. Employee requests to approve or
 finalize a refund require `/bin/id` to include `refund_manager`, returns policy to explicitly allow
 the requested action for the current return status, and the supported runtime refund command to
@@ -488,8 +645,9 @@ an `/archive/*.tsv` file and asks for the total fraudulent payment amount, use
 `archive_payment_fraud_total_answer(path=..., submit=True)` or `contract_task_answer(submit=True)`:
 that answer must be a money total such as `EUR 5245.00`, and refs must cite archive row anchors
 such as `/archive/file.tsv#row=<RowID>` rather than `/proc/payments/pay_*.json`. The helpers are
-read-only and should be preferred over `ws.list()`, `ws.tree()`, or broad `ws.search()` calls on
-payment stores. Archive TSV normalization maps non-sensitive aliases such as `archive_payment_id`,
+read-only and should be preferred over hand-written `ws.list()`, `ws.tree()`, or broad `ws.search()`
+calls on payment stores. If `/bin/sql` lacks a `payments` table, the normal fraud-id helper performs
+its own bounded `/proc/payments` fallback; do not replace it with a manual full-tree answer. Archive TSV normalization maps non-sensitive aliases such as `archive_payment_id`,
 `customer_ref`, and `store_ref`, preserves unknown non-sensitive archive columns for
 schema-derived fraud/risk/chargeback/dispute/incident/case markers, and deduplicates repeated row
 ranges by `RowID`.
@@ -516,10 +674,9 @@ diagnostic same-day straggler candidates, excluded candidates and reasons, and t
 It may add a tiny amount-outlier bridge only when the row is archived paid, in the seed store set,
 on an accepted second-wave day, close to the accepted second-wave time window, and shares a customer
 with an accepted second-wave row; this is bounded and recorded separately in diagnostics.
-For normal `/proc/payments` fraud-id tasks, `archived_paid_population_anomaly` can be promoted only
-when no identifier/fallback cluster exists, the archived-paid population is small, identifier
-checks are clear, and all four archived-vs-non-archived ratio checks are very strong. Otherwise it
-is diagnostics-only and lists the ratio checks plus archived/non-archived profile summaries. Broad
+For normal `/proc/payments` fraud-id tasks, `archived_paid_population_anomaly` is diagnostics-only:
+it lists the ratio checks plus archived/non-archived profile summaries, but it must not submit
+payment refs unless another record-level detector identifies a concrete fraud sub-pattern. Broad
 status/failure/3DS action-required and payment-id sequence groups are diagnostic context only. If
 the helper returns
 `NO_CONFIDENT_FRAUD_CLUSTER`, do not manually choose a largest diagnostic group; the runtime will

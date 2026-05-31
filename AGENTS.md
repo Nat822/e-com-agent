@@ -803,9 +803,201 @@ Rationale: t07 — `verify()` requires `search_trail` for MERCHANT tasks, but `c
     - `t38` showed `archived_paid_population_anomaly` correctly selected a bounded 20-payment archived-paid population with passing submit review, but the central archived-payment guard still blocked it as unsupported. Updated `ws.answer()` so normal `/proc/payments` fraud-id tasks may submit this mode only when the helper `submit_review.ok` is true.
     - `t40` partially recovered the incident but logs were misleading because repeated-fingerprint evidence reported seed amount instead of submitted-row amount and lacked full diagnostics. Repeated-fingerprint evidence now reports submitted `amount_cents`, keeps `seed_amount_cents`, and includes diagnostics for later expansion analysis.
     - `t48` selected a weak archive TSV fallback cluster: one customer, low total, repeated device/geo/customer, no semantic marker. Tightened TSV submit review so low-value single-customer velocity bursts do not pass on tautological signals such as repeated customer, repeated geo, concentrated spread, or tight time alone.
-    - Split the central fraud guard by task contract: archive TSV fraud-total answers must cite `/archive/...tsv#row=<RowID>` refs and use TSV-approved detector modes with passing review; normal payment-id fraud tasks use `/proc/payments` refs and may trust approved population anomalies.
-    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for population-anomaly promotion, TSV non-tautological corroboration, and repeated-fingerprint submitted amount diagnostics.
+  - Split the central fraud guard by task contract: archive TSV fraud-total answers must cite `/archive/...tsv#row=<RowID>` refs and use TSV-approved detector modes with passing review; normal payment-id fraud tasks use `/proc/payments` refs and may trust approved population anomalies.
+  - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for population-anomaly promotion, TSV non-tautological corroboration, and repeated-fingerprint submitted amount diagnostics.
   - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and expanded TypeScript-template Python bootstrap syntax compilation.
+  - Follow-up after latest full run for `t45,t46,t49,t50`: `inventory_answer_count()` now supports `comparison="lt"` for fewer-than threshold counts and cites below-threshold contributing product refs; `discount_request_answer()` recognizes "max applicable" / "whatever percent the policy allows" as policy-maximum wording and clamps placeholders instead of denying; `catalog_answer_count()` discovers count/reporting docs before SQL, preserves them on fallback, supports `<QTY: n>`, and falls back to bounded catalogue directory counts after SQL spool errors; `checkout_user_basket_answer()` now returns unsupported for checkout mutation requests that ask it to infer newest/latest open basket among zero/multiple active baskets.
+  - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for the new inventory comparison, discount max wording, catalogue count fallback refs, and checkout unsupported behavior.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and expanded TypeScript-template Python bootstrap syntax compilation.
+  - Follow-up after focused `t45,t46,t49` rerun (`runs/2026-05-27T20-05-36-972Z`): all attempted tasks failed before helper execution because the new `<QTY: n>` answer-format detector emitted invalid Python from a quote-class regex inside the TypeScript template. Replaced that regex with a normalized text check and added an evaluated-template bootstrap syntax check that catches runtime-unescaped Python.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, raw Python bootstrap syntax compilation, and evaluated TypeScript-template Python bootstrap syntax compilation.
+  - Follow-up after latest focused `t45,t46,t49,t50` run (`runs/2026-05-27T20-12-32-992Z`): bootstrap was fixed and `t46` passed, but `t45` missed a checked product ref on a zero-result threshold count, `t49` missed `/docs/urgent-sql-incident.md` after SQL spool failure, and `t50` clarified instead of deterministically checking out the most-recent authenticated basket.
+  - Implemented the recommended fixes: zero-result `comparison="gte"` inventory list counts now cite exact resolved checked product refs; catalogue count SQL failures now cite generic SQL incident/runtime docs before fallback refs; `checkout_user_basket_answer()` now supports newest/latest/most-recent authenticated basket selection only when lifecycle timestamps choose one unique active basket and visible line inventory is checked as available today.
+  - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for SQL incident refs, zero-count inventory proof refs, and guarded newest-basket checkout.
+  - Implemented recommended fixes after latest full-run failures for `t08,t13,t22,t26,t43,t45,t49,t50`:
+    - Catalogue existence line matching now tolerates weak one-token product-line drift when exact brand/kind/model/properties match, targeting `Garant` vs generated `Garantie`-style misses.
+    - `detect_answer_format()` / `format_answer()` now support lowercase spaced `<count: n>` answers from patterns such as `<count: %VALUE%>`, and relevant count docs parse lowercase `<count: n>` overrides.
+    - Single-store inventory `comparison="lt"` treats a resolved product with no visible inventory row as zero available; zero-result `comparison="gte"` proof refs also keep shallow checked SKU refs when those are evaluator proof paths.
+    - `checkout_user_basket_answer()` now returns clarification for generic "my basket" multiple-active-basket checkout ambiguity, while newest/latest paths require known sufficient stock when the user says not to force unavailable items.
+    - `discount_last_checkoutable_basket_answer()` filters to the current employee store before timestamp selection for explicit "from my store" wording and filters bogus store tokens such as `store_id`/`store_manager` out of current-store detection.
+    - Amount-only customer refund matches no longer submit custom outcome codes; they normalize to `OUTCOME_NONE_UNSUPPORTED` with candidate refs unless an explicit id and documented customer-facing refund path exists.
+    - The central answer guard now normalizes any unsupported custom outcome string to `OUTCOME_NONE_UNSUPPORTED` before submission.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and evaluated TypeScript-template Python bootstrap syntax compilation. Focused dev rerun for `t08,t13,t22,t26,t43,t45,t49,t50` was requested but not approved.
+  - Follow-up after latest focused rerun (`runs/2026-05-28T04-43-28-439Z`): `t08`, `t22`, `t26`, and `t50` passed; `t13` and `t45` had correct counts but wrong count-token casing/spacing, `t49` needed compact lowercase `<count:n>`, and `t43` found eligible customer+amount refund candidates but returned unsupported through the old amount-only path.
+  - Implemented the recommended fixes:
+    - `detect_answer_format()` now distinguishes uppercase `<COUNT:%d>`, lowercase compact `<count:NUMBER>`, and lowercase spaced `<count: %VALUE%>`; `format_answer()` and `verify()` support the compact lowercase form.
+    - Zero-result `comparison="gte"` inventory proof refs no longer add shallow `/proc/catalog/SKU.json` refs when deep/kind-level proof refs already exist.
+    - Amount-only customer refund requests now execute through the same helper/central-guard path only when all matched candidates are eligible, returns docs grant customer-facing refund authority without `refund_manager`, and every runtime refund command succeeds; otherwise they remain unsupported with candidate refs.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for the refined count formats and amount-only refund contract.
+  - User preference recorded: do not ask the user to run task commands in chat; provide copyable terminal commands instead.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and evaluated TypeScript-template Python bootstrap syntax compilation.
+  - Follow-up after latest focused `t13,t43,t45,t49` rerun (`runs/2026-05-28T04-59-26-073Z`): `t13`, `t43`, and `t45` passed; `t49` failed because SQL spool fallback counted the full `/proc/catalog/power_tools/cordless_drill_driver` directory (`30`) even though a dated count doc required only `Graz` SKUs with `available_today > 0` (`14`). Root cause: SQL failure left `kind_id=None`, so the positive-inventory city rule could not execute.
+  - Implemented the recommended fix:
+    - `catalog_answer_count()` now derives `kind_id` from bounded fallback paths shaped like `/proc/catalog/<category>/<kind>` before applying dated count docs.
+    - `catalog_count_update_adjustment()` now records `inventory_positive_city_count_failed` diagnostics if the city-scoped SQL adjustment itself fails, instead of collapsing the doc into a generic unparsed note.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for fallback-derived kind IDs in city-scoped count docs.
+  - Follow-up after latest `t49` rerun (`runs/2026-05-28T05-07-43-982Z`): task required exact answer format `<ANSWR: %VALUE%>` and failed only because generated custom code dropped the required doc ref `/docs/ops-policy-notes/catalogue-count-saws-cutters-graz-2024-07-17.md`, replacing helper refs with `["/bin/sql"]`.
+  - Implemented the recommended fix:
+    - `detect_answer_format()` now supports custom angle-label count wrappers as `ANGLE_LABEL_COUNT:<LABEL>`, including `<ANSWR: %VALUE%>`.
+    - `format_answer()` and `verify()` render/validate custom label counts exactly as `<LABEL: n>`.
+    - `catalog_answer_count()` re-detects the task instruction when left at its default `ANGLE_COUNT`, so omitted `answer_format` still honors custom wrappers, and its return dict now exposes top-level `refs`, `outcome`, `policy_citation`, and `current_update_evidence` so non-submitting callers preserve required docs.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for custom angle-label count formats and preserving helper refs.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, evaluated TypeScript-template Python bootstrap syntax compilation, and a direct bootstrap smoke test showing `<ANSWR: %VALUE%>` -> `ANGLE_LABEL_COUNT:ANSWR` -> `<ANSWR: 14>` with `verify()` passing.
+  - Follow-up after latest `t49` rerun (`runs/2026-05-28T05-30-14-915Z`): task required `<count: NUMBER>`, but helper submitted compact `<count:0>` and failed to apply a relevant Vienna positive-inventory count doc because SQL spool failure left `kind_id=None`.
+  - Implemented the recommended fixes:
+    - `detect_answer_format()` now distinguishes compact `<count:NUMBER>` from spaced `<count: NUMBER>`, so spaced templates render as `<count: n>`.
+    - Catalogue count fallback terms now remove stopwords such as `and`, preventing phrases like `Shelving and Cabinet` from requiring a literal `and` in kind paths.
+    - When SQL kind lookup and catalogue-directory fallback fail, `catalog_answer_count()` can infer a candidate kind id from already-selected count/reporting doc refs/content using generic singular/plural slug variants, without fixed kind maps.
+    - Positive city-inventory count docs with no usable kind id now record `inventory_positive_city_missing_kind_id` diagnostics instead of generic `unparsed_relevant_doc`.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for spaced lowercase count templates and doc-derived kind-id inference.
+  - Follow-up after latest `t49` rerun (`runs/2026-05-28T05-45-25-934Z`): task required compact `<total:%VALUE%>`, but helper rendered spaced `<total: 27>`. It also found the required Salzburg work-trousers count doc and `kind_id=work_trousers`, but the city-positive SQL adjustment failed with the same SQL spool error and fell back to the raw directory count `27` instead of expected `5`.
+  - Implemented the recommended fixes:
+    - Custom angle-label count detection now distinguishes compact `<total:%VALUE%>` as `ANGLE_LABEL_COUNT_COMPACT:total` from spaced `<ANSWR: %VALUE%>` as `ANGLE_LABEL_COUNT:ANSWR`.
+    - `format_answer()` and `verify()` support compact custom angle labels like `<total:5>`.
+    - City-scoped positive-inventory count docs now try a bounded file-backed inventory fallback when the SQL adjustment fails due runtime/spool errors, before falling back to the raw catalogue directory count.
+    - Understood positive-inventory docs that fail execution are no longer also emitted as generic `unparsed_relevant_doc`.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for compact/spaced custom label counts and file-backed city inventory fallback.
+  - Follow-up after comparing current and historical `t38,t39,t40` fraud runs:
+    - Current `t38` regressed because broad `archived_paid_population_anomaly` evidence was promoted to submitted payment refs, creating false positives.
+    - Current `t39` under-selected a repeated-fingerprint cluster because second-wave extension rejected the whole extension when multiple compact components had a wide combined span.
+    - Current `t40` score fell from the prior high-water mark because broadening beyond the strongest repeated-fingerprint/incident component added lower-confidence rows.
+  - Implemented the recommended fraud and SQL-doc fixes:
+    - `archived_paid_population_anomaly` is now diagnostic-only for `/proc/payments` fraud-id submissions; the central guard blocks it as a submitted mode unless a tighter approved seed mode provides the refs.
+    - `_extend_payment_incident_second_wave()` now selects the strongest compact qualifying component and records other valid components as diagnostics instead of rejecting all extension candidates by combined separated span.
+    - `sql_incident_refs()` now discovers SQL/runtime incident documentation by scanning `/docs` and `/bin` content for SQL, spool/no-space, stale-JSON, database, and trust-SQL language, without hardcoding a fixed incident filename.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for diagnostic-only population anomalies, strongest-component second-wave fraud extension, and content-discovered SQL incident refs.
+  - Verified `git diff --check`, `npm.cmd run typecheck`, `npm.cmd run build`, and a one-command in-memory extraction/compile of the embedded TypeScript-template Python bootstrap (`bootstrap bytes 406960`, `bootstrap compile OK`).
+  - Follow-up after latest focused run (`runs/2026-05-28T12-20-45-780Z`) for `t38,t39,t40,t43,t48`:
+    - `t39` scored below the older perfect runs because second-wave extension selected only the strongest 6-row component and left near-following same-day rows out.
+    - `t40` submitted the same 20 IDs as the older high-score run, but the current evaluator still reported false positives, so the fix should not blindly expand beyond helper-gated profile rows.
+    - `t38` returned unsupported even though the strict archived-paid population anomaly review passed in diagnostics.
+    - `t43` returned unsupported because returns policy parsing required literal customer-facing wording, despite eligible customer amount-only return candidates and the documented refund command path.
+    - `t48` selected a low-value single-customer dense archive TSV time window, causing amount mismatch and false positives.
+  - Implemented the recommended fixes:
+    - `_extend_payment_incident_second_wave()` can now submit bounded same-day stragglers only when they stay in seed stores, inside the expanded seed amount range, and within 20 minutes after the accepted wave; remaining stragglers stay diagnostic.
+    - Strict `archived_paid_population_anomaly` can again submit for normal `/proc/payments` fraud-id tasks only when the dedicated population review is `ok`; the central guard allows that mode only with passing review.
+    - Archive TSV fallback review now rejects low-value single-customer `created_at_window` dense-time clusters as diagnostic-only.
+    - Customer amount-only refund policy authorization now also accepts docs that describe an eligible customer-request return status plus `/bin/payments refund` without `refund_manager`, while still requiring every matched candidate to be eligible and every runtime refund command to succeed.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for the refined fraud/TSV/refund helper behavior.
+  - Verified one-command embedded Python bootstrap extraction/compile, `npm.cmd run typecheck`, `npm.cmd run build`, and `git diff --check`.
+  - Follow-up after latest focused run (`runs/2026-05-28T12-55-43-585Z`) and `FRAUD_PATTERN_REFERENCE.md` review:
+    - `t38` scored 0 because `archived_paid_population_anomaly` submitted 20 broad population-ratio refs; evaluator recovered ~0% and flagged more than ten false positives.
+    - `t48` scored 0 because an archive TSV repeated-device cluster passed on campaign amount without independent corroboration; evaluator recovered ~0% and reported amount mismatch/false positives.
+    - `t39`/`t40` remain repeated-fingerprint plus cautious second-wave tasks; the missing information is why near second-wave rows are rejected, not another broad expansion.
+  - Implemented the recommended safety fixes:
+    - `archived_paid_population_anomaly` is again diagnostic-only: `_payment_population_anomaly_submit_review()` always returns `ok=False`, `archived_payment_fraud_answer()` no longer promotes it, and the central guard no longer allows it as a submitted mode.
+    - Archive TSV repeated `payment_method_fingerprint`/`device_fingerprint` clusters now require independent non-tautological corroboration; large/multi-customer campaign amount is diagnostic context, not a bypass.
+    - `_extend_payment_incident_second_wave()` now records richer `excluded_candidates` and `near_second_wave_rejected_rows` diagnostics with timestamps, amount, store, status, customer, archive flag, and rejection reasons.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` so helper, prompt, and tool description all say population anomalies are diagnostics only and TSV amount alone cannot pass.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, one-command embedded Python bootstrap extraction/compile (`bootstrap bytes 411239`, `bootstrap compile OK`), and `git diff --check`.
+  - Follow-up after latest focused run (`runs/2026-05-28T16-30-09-590Z`):
+    - `t38`, `t39`, and `t40` all failed without answers because `archived_payment_fraud_answer()` crashed when `/bin/sql` returned `SQL logic error: no such table: payments`; the workspace still had `/proc/payments`.
+    - `t43` returned `OUTCOME_NONE_UNSUPPORTED` for an amount-only customer refund with candidate return/payment refs.
+    - `t48` completed through `archive_payment_fraud_total_answer()` with `EUR 6596.00` and 5 archive row refs, but this run had `scoreAvailable:false`.
+  - Implemented the recommended no-SQL payment-loader fallback:
+    - `_payment_load_rows()` now catches SQL `payments` table failures and loads bounded sanitized `/proc/payments/**/*.json` rows instead of crashing.
+    - The fallback normalizes common payment field aliases, infers archived baskets from archive markers when needed, filters sensitive card-like fields, and records `scratchpad["payment_loader_fallback"]`.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` so the fraud helper remains the required route when SQL lacks `payments`; the model should not hand-roll broad payment filesystem searches.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, one-command embedded Python bootstrap extraction/compile (`bootstrap bytes 416017`, `bootstrap compile OK`), and `git diff --check`.
+  - Follow-up after latest 51-task run scored 18/51 and organizer guidance clarified the runtime contract:
+    - Added SQL capability wrappers (`sql_table_exists`, `sql_query_or_none`) so missing `products`, `product_kinds`, `inventory`, or `payments` tables are treated as normal workspace shape, not helper crashes.
+    - Added bounded `/proc` JSON data-layer helpers (`proc_walk_json`, `proc_read_json`) plus normalized `/proc/catalog` and `/proc` inventory fallbacks.
+    - Added `workspace_bootstrap_context()` to read workspace `/AGENTS.md`, capture `tree -L 2 /docs`, record `/bin/id`, and list visible SQL tables for diagnostics.
+    - Catalogue/product helpers now use `/proc/catalog` fallback when `products` or `product_kinds` tables are absent; count-by-kind can derive kind ids from `/proc/catalog` paths.
+    - Inventory/store/quote/buy-max helpers now use `/proc` inventory/store fallback when `inventory` is absent instead of returning all false or crashing.
+    - Updated `agent/index.ts` tool description and `docs/HELPER_CONTRACT.md` to state `/proc` JSON is the durable source of truth and `/bin/sql` is only an optional accelerator.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and one-command embedded Python bootstrap compile via a single PowerShell pipeline into `node -`.
+  - Follow-up after latest run `runs/2026-05-28T20-48-52-570Z` took `7935s` with 20 `execute_code` timeouts:
+    - Root cause was old fixed SQL table assumptions (`products`, `inventory`, `payments`) against the current runtime schema (`product_variants`, `product_variant_properties`, `store_inventory`, `payment_transactions`, `stores`), forcing broad `/proc` fallbacks and repeated timeouts.
+    - Added schema-adaptive SQL adapters that inspect table columns dynamically and normalize current product, inventory, store, and payment projections into the existing helper row shapes.
+    - `catalog_product_rows`, `catalog_product_rows_broad`, `_inventory_candidate_rows`, `catalog_count_by_kind`, `catalog_find_kind_id`, `inventory_available_qty`, store resolution, and payment fraud loading now try current SQL projections before bounded `/proc` fallback.
+    - `inventory_available_qty()` now tolerates accidental `min_qty` keyword arguments so generated quote code does not crash after several exploratory turns.
+    - Updated `agent/index.ts` and `docs/HELPER_CONTRACT.md` to tell the model to rely on schema-adaptive helpers rather than fixed table-name SQL.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and the one-command embedded Python bootstrap compile.
+  - Implemented the refined hybrid runtime architecture:
+    - Added `discover_runtime_model()` to build a per-task model from `/bin/id`, SQL schema/columns, semantic table scoring, docs/rule facts, and source refs.
+    - Added `discover_runtime_rules()` to extract compact `/docs` rule facts across security, discount, checkout, payment, returns, catalogue, and operations domains.
+    - Added explicit rule priority semantics: specific scoped/current/security rules outrank general guidance; unresolved conflicts choose the safer non-mutating outcome.
+    - Replaced remaining fixed-name assumptions in the SQL adapters with `semantic_sql_table(role)` so products, properties, kinds, inventory, stores, and payments are selected by column/name scores rather than hardcoded table names.
+    - Policy helpers for discount, returns, and payment verification now include dynamically discovered rule refs/facts in scratchpad diagnostics, while preserving existing deterministic safety gates.
+    - `workspace_bootstrap_context()` now records semantic table candidates and the rule-priority note for the model.
+    - Updated `agent/index.ts` and `docs/HELPER_CONTRACT.md` for the new hybrid data/rule architecture.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, and the one-command embedded Python bootstrap compile.
+  - Follow-up after latest full run regressed from 28.6/53 in `runs/2026-05-29T05-19-16-313Z` to 17.6/53 in `runs/2026-05-29T07-58-53-214Z`:
+    - Log comparison showed latest runtime rose to `2:50:16` with 30 execute-code timeouts; newly regressed no-answer tasks included `t04,t13,t15,t20,t26,t45,t46`.
+    - Root cause was the hybrid runtime model persisting full SQL schema/index caches and full `runtime_data_model` into scratchpad, bloating later turns and logs.
+    - `_sql_tables()` now caches heavy SQL discovery only in process memory, filters to real tables, and `discover_runtime_model()` persists only `runtime_data_model_summary`.
+    - Semantic table scoring now penalizes family/category/variant/inventory/payment tables for the wrong roles so `product_kinds` is not displaced by `product_families`, and product/property projections require stronger SKU/key/value evidence.
+    - Runtime rule discovery no longer reads full candidate docs when called in metadata-only mode.
+    - Added `qty=%d`/generic key-value count formatting and documented it.
+    - Removed stale prompt guidance that claimed legacy SQL `inventory` always exists; inventory tasks must use schema-adaptive helpers.
+    - Added a compatibility fallback for generated `SELECT ... FROM inventory` queries and an `archive_payment_fraud_answer()` alias for the observed archived-fraud typo.
+  - Verified `npm.cmd run typecheck`, `npm.cmd run build`, embedded Python bootstrap compile, `git diff --check`, and a guard that rejects persisted `_sql_tables_cache`/full `runtime_data_model` scratchpad writes in one PowerShell command.
+  - Read newest run `runs/2026-05-29T11-02-11-681Z`:
+    - Run was effectively invalid: only `t01` completed with no answer and `t02` started, because every execute call crashed before task code with `SyntaxError: unterminated string literal` in the Python bootstrap.
+    - Root cause was the new legacy-inventory SQL compatibility helper using `\n` inside the TypeScript template literal; Node wrote real newlines into Python string literals.
+    - Escaped those strings as `\\n` in `agent/workspace-client.ts`.
+    - Re-ran the one-command validation: `npm.cmd run typecheck`, `npm.cmd run build`, embedded Python bootstrap compile, `git diff --check`, and scratchpad-cache guard all passed.
+  - Read latest score run `runs/2026-05-29T11-07-40-964Z` (user reported 17.9/53, runtime 2:24:08; local `ok=21/53`, elapsed `8659.9s`):
+    - Bootstrap syntax was fixed; remaining failures were real helper/runtime issues.
+    - Dominant failure cluster was 180s helper timeouts/no-answer in inventory list counts (`t13-t16,t45`), city inventory totals (`t17-t20,t33`), last-checkoutable discount (`t26,t46`), no-id checkout (`t22,t50`), and quote table (`t47`).
+    - Receipt comparison tasks (`t51-t53`) needed a durable terminal helper; `t51` hand-rolled a correct-looking `<NO>` but default `verify()` blocked it due missing helper-shaped evidence.
+    - Implemented `TEXT_COUNT` output format support for quoted wrappers like `Total: %d`, `Count: %d`, `result %d`, `%d total`, `total products: %d`, `answer=%d`, and `report count %d`.
+    - Added `receipt_price_delta_answer()` and routed `/uploads` old-receipt price comparison through `contract_task_answer()`.
+    - Removed expensive `workspace_bootstrap_context(read_docs=False)` calls from hot inventory/quote/city helper entrypoints.
+    - Hardened `_terminal_answer()` to prefer existing docs refs before falling back to `/task-system-prompt`, reducing HTTP 400 risk for unsupported/clarification paths.
+    - Updated `agent/index.ts`, `agent/system-prompt.ts`, and `docs/HELPER_CONTRACT.md` for new receipt helper and count wrapper formats.
+    - Verified with one command: `npm.cmd run typecheck`, `npm.cmd run build`, embedded Python bootstrap compile, `git diff --check`, and scratchpad-cache guard.
+  - Implemented deeper runtime improvements from the same run-log analysis:
+    - Added a schema-adaptive batch inventory reader for multiple store IDs/SKUs in one SQL call.
+    - Added per-execute caches for `inventory_resolve_product()` and `inventory_available_qty()`.
+    - `inventory_answer_count()` now resolves all requested products first, fetches stock rows for all resolved SKUs at the target store in one batch query, then falls back per SKU only when needed.
+    - `buy_max_across_stores_answer()` / `city_inventory_quantity_answer()` now fetch city/store stock for the resolved SKU in one batch query before per-store fallback.
+    - Tightened semantic table scoring for the `stores` role so employee/payment/basket tables are less likely to outrank the real `stores` table.
+    - Added SQL-first customer email lookup/cache and constrained last-checkoutable discount basket path discovery to customer-linked basket IDs before any broad basket listing.
+    - Updated `docs/HELPER_CONTRACT.md` for the new caching/batch inventory behavior.
+    - Verified again with one command: `npm.cmd run typecheck`, `npm.cmd run build`, embedded Python bootstrap compile, `git diff --check`, and scratchpad-cache guard.
+  - Follow-up after interrupted run `runs/2026-05-29T16-04-53-109Z`:
+    - The run reached only `t21` before interruption; the slow cluster was `t15-t20`, where inventory/store helpers repeatedly spent 180s in product/store resolution and city inventory totals.
+    - Strengthened semantic store scoring so `stores` metadata outranks `store_inventory`, and made `_runtime_store_records_for_city()` prefer the concrete `stores` table when present.
+    - Relaxed schema-adaptive product SQL retrieval to fetch broad brand/kind/model candidates and score them in Python before falling back to `/proc`, avoiding over-filtered SQL misses that triggered broad filesystem scans.
+    - Flattened `catalog_find_matching_products()` results with top-level `sku`, `path`, and `refs`, canonicalized bare `store_...` refs in `sanitize_refs()`, and made city quantity helpers submit zero with close-candidate evidence instead of launching a slow catalogue-existence fallback when product resolution fails.
+    - Added a runner-side sanitizer for generated `from functions import ...` / `import functions` lines so preloaded helper imports no longer waste a recovery turn.
+  - Latest 100-task run review (`runs/2026-05-30T08-35-14-325Z`):
+    - Run completed `ok=37/100` in `429.9s`; timing was much better than prior 53-task runs, but blind/prod-style `scoreAvailable:false` results exposed new task families.
+    - Dominant failures were hyphenated runtime IDs (`basket-0026`, `pay-0035`, `cust-0157`), renamed proc roots (`/proc/carts`, `/proc/locations`), and short exact-output tasks that the model probed manually instead of finalizing.
+    - Added ID/path compatibility helpers for hyphen/underscore variants and proc-root discovery, and updated checkout, 3DS, return/refund, discount, store, and customer lookup paths to use them.
+    - Added `contract_task_answer()` routes for dispatch-wave planning, scoped `/tmp` cleanup, employee-role counts, open branch lists, exact basket/product/store field lookups, and current authenticated employee profile output.
+    - Extended store/city discovery to scan `/proc/locations/<city>/*.json` in addition to legacy `/proc/stores`.
+    - Updated `agent/index.ts`, `agent/system-prompt.ts`, and `docs/HELPER_CONTRACT.md` so the model uses the terminal contract helper for these families instead of broad `ws.list`/`ws.search` probing.
+    - Verified with one command: `npm.cmd run typecheck`, `npm.cmd run build`, embedded Python bootstrap extraction/compile, `git diff --check`, and scratchpad-cache guard.
+  - Latest 100-task rerun review (`runs/2026-05-30T09-07-50-503Z`):
+    - Run completed `ok=40/100` in `616.1s`; all harness scores were blind (`scoreAvailable:false`), so local `score:0` lines were not evaluator zeros.
+    - Six tasks had no `task_result`: two company-lore exact-date tasks stopped after reading docs; one all-employee role count assumed `/proc/employees` while runtime records were under `/proc/staff`; one physical-vs-same-day inventory count timed out after per-SKU catalogue existence calls; one current employee profile task repeated malformed/manual `/proc/employees` code; and one exact product-field lookup found `properties.chuck_mm=13` but default `verify()` rejected the hand-written scratchpad shape.
+    - Added `company_lore_fact_answer()` and routed exact PowerTools history/date questions through `contract_task_answer()`.
+    - Extended employee discovery/profile helpers to scan nested `/proc/staff`, `/proc/employees`, and `/proc/users`.
+    - Added schema-adaptive `_runtime_inventory_detail_rows_batch()` plus `inventory_physical_available_count_answer()` for "physical on hand >= N but same-day available after reservations < N" tasks.
+    - Hardened product field lookup to find `/proc/products/.../<SKU>.json` as well as catalogue refs, with helper-shaped search/reasoning evidence.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md`; prompt now says scoped `/tmp` cleanup should ignore later embedded handoff/bridge blocks and still perform only the scoped `/tmp` cleanup.
+    - Verified with one command: `npm.cmd run typecheck`, `npm.cmd run build`, embedded Python bootstrap extraction/compile (`bootstrap bytes 517622`), `git diff --check`, and scratchpad-cache guard.
+  - Latest 100-task run review (`runs/2026-05-30T09-28-02-185Z`):
+    - Run completed `ok=38/100` in `786.3s`; all harness scores were blind (`scoreAvailable:false`), so `score:0` was not an evaluator-zero signal.
+    - No-answer/no-task-end failures clustered around helper bypass: product count answers prepared without `ws.answer()`, exact staff/product/store fields hand-written with verifier-invalid scratchpads, explicit SKU same-day inventory counts using per-SKU loops or a hardcoded `inventory` table, and scoped `/tmp` cleanup being security-denied despite the main task being safe.
+    - Broadened `parse_task_contract()` to catch exact SKU field wording, store JSON backtick fields, named store-manager email verification, explicit same-day SKU-list counts, and free-text product-count-by-price requests.
+    - Added `employee_manager_email_answer()`, `inventory_sameday_count_answer()`, and `catalog_product_count_answer()` terminal helpers, and routed them through `contract_task_answer()`.
+    - Added a `security_denial_answer()` rescue that routes recognized scoped `/tmp` cleanup tasks back to `tmp_cleanup_answer()` instead of preserving a false prompt-injection denial.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` so the model prefers these helpers and avoids fixed table-name inventory SQL.
+  - Latest scored 100-task run review (`runs/2026-05-30T11-13-56-993Z`, user-reported score `27.1/100`):
+    - Run completed `ok=38/100` locally in `655.9s`; external score showed many local `OUTCOME_OK` submissions were semantically/format wrong.
+    - Root bug: new regexes inside the TypeScript Python bootstrap were not escaped for template-literal evaluation, so `parse_task_contract()` emitted malformed Python regexes and crashed manager-email, company-lore, cleanup, and other contract routes.
+    - Fixed regex/template escaping and added a one-command Node-evaluated bootstrap smoke test that executes `parse_task_contract()` for manager email, scoped cleanup, company lore, SKU lookup, product field lookup, and same-day SKU inventory count.
+    - Added runtime `/AGENTS.MD` yes/no format detection so catalogue/existence helpers can emit `TRUE(1)` / `FALSE(0)` when the workspace says that is required.
+    - Added `catalog_sku_lookup_answer()` for product-code/Stock-Keeping-Unit/code-only tasks so they return one SKU or clarification instead of binary `<YES>/<NO>`.
+    - Added `catalog_field_by_description_answer()` for product-description field lookups such as `category_id`.
+    - Broadened company-lore contract parsing for legal trading start date, first public opening date, and first store name; broadened scoped `/tmp` cleanup parsing so "delete under /tmp" works even without the word "temporary".
+    - Normalized `RoleDiscountManager` / `discountManager` identity strings as valid discount-manager authority.
+    - Updated `agent/system-prompt.ts`, `agent/index.ts`, and `docs/HELPER_CONTRACT.md` for the new helper routes and runtime yes/no format rule.
+    - Verified with one command: `npm.cmd run typecheck`, `npm.cmd run build`, Node-evaluated embedded Python bootstrap smoke test (`dist bootstrap smoke ok 541352`), `git diff --check`, and scratchpad guard.
 
 #### Decisions made
 
@@ -826,6 +1018,13 @@ Rationale: `Promise.race()` alone returns a timeout result but leaves LLM/Docker
 - [x] Run focused `t13,t26` dev rerun to verify counted shallow proof refs and basket line-inventory checkoutable filtering.
 - [ ] Run focused `t47,t48` dev rerun to verify canonical quote property parsing and chunked archive fraud-total reads.
 - [ ] Run focused `t38,t40,t48` dev rerun to verify approved population-anomaly submission, repeated-fingerprint diagnostics, and stricter TSV fallback rejection/selection.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t45,t46,t49,t50 --concurrency=1` to verify zero-count inventory proof refs, max-applicable discount clamping, catalogue SQL-incident refs, and guarded newest-basket checkout.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t08,t13,t22,t26,t43,t45,t49,t50 --concurrency=1` to verify typo-tolerant catalogue matching, inventory threshold refs/counting, checkout ambiguity/safety, current-store discount selection, refund outcome normalization, and lowercase count formatting.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t13,t43,t45,t49 --concurrency=1` to verify uppercase/lowercase count formatting, compact lowercase count formatting, shallow proof-ref filtering, and amount-only customer refund execution.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t49 --concurrency=1` to verify fallback-derived kind IDs let city-scoped positive-inventory count docs override bounded directory counts after SQL spool errors.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t49 --concurrency=1` to verify `<ANSWR: %VALUE%>` custom count formatting and required ops-policy count refs are preserved.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t49 --concurrency=1` to verify `<count: NUMBER>` spacing and doc-derived kind-id inference for city-scoped positive-inventory count docs.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t49 --concurrency=1` to verify compact `<total:%VALUE%>` formatting and file-backed positive city-inventory count fallback after SQL spool errors.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t26,t27,t28,t30,t31,t41 --concurrency=1` to verify the dynamic discount/3DS helper refinements.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t23,t24,t25,t42 --concurrency=1` to confirm security/discount refs and delegated t42 behavior stay correct.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t38,t39,t40 --concurrency=1` and inspect `fraud_payment_evidence.diagnostics`, especially `t38`, before adding another fraud selector.
@@ -837,9 +1036,14 @@ Rationale: `Promise.race()` alone returns a timeout result but leaves LLM/Docker
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t13,t14,t40,t44 --concurrency=1` to verify counted shallow refs, bounded second-wave fraud expansion, and refund-manager approval.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t32 --concurrency=1` to verify support-note catalogue claim checks cite the exact checked size/color SKU.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t38,t39,t40 --concurrency=1` to verify population-anomaly false positives are blocked while repeated-fingerprint and second-wave recovery stay intact.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t38,t39,t40,t43,t48 --concurrency=1` to verify strict population anomaly, same-day second-wave stragglers, guarded t40 behavior, amount-only customer refunds, and stricter TSV dense-window rejection.
+- [ ] After the next SQL-spool catalogue/count failure, verify `sql_incident_refs()` cites the content-matched `/docs` or `/bin` incident doc rather than a filename-specific hardcoded ref.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t01,t20,t26,t42,t43,t44 --concurrency=1` to verify canonical refs, discount delegation negation, refund clarification/unsupported split, and last-checkoutable basket resolution.
 - [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t05,t07,t12,t13,t17,t32,t42,t43 --concurrency=1` to verify support-claim refs/property recovery, count update parsing, inventory/buy-max refs, scoped discount grants, and amount-only refund outcomes.
 - [ ] Run a focused dev bench sample covering inventory availability and buy-max-across-stores tasks.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t01,t08,t13,t14,t15,t16,t20,t32,t38,t39,t40,t45,t47 --concurrency=1` to verify SQL-missing `/proc` fallbacks for catalogue, inventory, quote, and payment-fraud families.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t11,t12,t13,t14,t15,t16,t17,t18,t19,t20,t22,t33,t38,t39,t40,t45,t46,t47 --concurrency=1` to verify schema-adaptive SQL adapters remove 180s catalogue/inventory/payment timeouts.
+- [ ] Run focused `npx.cmd tsx runs/run.ts --bench=bitgn/ecom1-dev --tasks=t23,t24,t25,t26,t28,t35,t37,t42,t43,t44 --concurrency=1` to verify dynamically discovered security/discount/payment/returns rule facts preserve safety outcomes without adding noisy refs.
 - [ ] Add helper-level tests for `detect_answer_format`, `format_answer`, `catalog_answer_existence`, and inventory helpers.
 
 ---
